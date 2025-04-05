@@ -7,6 +7,7 @@ kotlinx-coroutines-android = "1.9.0"
 room = "2.6.1"
 okhttp-logging-interceptor = "4.12.0"
 jetbrainsKotlinJvm = "2.0.21"
+solanakt = "5da8bfe"
 
 [libraries]
 hd-wallet-kit-android = { module = "com.github.horizontalsystems:hd-wallet-kit-android", version.ref = "hdWalletKitAndroid" }
@@ -22,6 +23,7 @@ room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 sol4k = { module = "org.sol4k:sol4k", version.ref = "sol4k" }
 
 okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp-logging-interceptor" }
+solanakt = { module = "com.github.piratecash:SolanaKT", version.ref = "solanakt" }
 
 [plugins]
 jetbrains-kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "jetbrainsKotlinJvm" }

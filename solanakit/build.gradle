@@ -51,6 +51,13 @@ android {
                 def (name, version) = moduleId.split(':')
                 substitute module("org.bouncycastle:$name:$version") using module("org.bouncycastle:bcprov-jdk15to18:1.80")
             }
+
+        }
+        resolutionStrategy.eachDependency {
+            if (requested.group == "com.github.metaplex-foundation" &&
+                    requested.name == "SolanaKT") {
+                useTarget(libs.solanakt)
+            }
         }
     }
 }
