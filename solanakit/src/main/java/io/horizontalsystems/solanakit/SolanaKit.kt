@@ -3,13 +3,10 @@ package io.horizontalsystems.solanakit
 import android.app.Application
 import android.content.Context
 import android.util.Log
-import com.metaplex.lib.programs.token_metadata.accounts.MetadataAccountJsonAdapterFactory
-import com.metaplex.lib.programs.token_metadata.accounts.MetadataAccountRule
 import com.solana.actions.Action
 import com.solana.api.Api
+import com.solana.networking.HttpNetworkingRouter
 import com.solana.networking.Network
-import com.solana.networking.NetworkingRouterConfig
-import com.solana.networking.OkHttpNetworkingRouter
 import io.horizontalsystems.solanakit.core.BalanceManager
 import io.horizontalsystems.solanakit.core.ISyncListener
 import io.horizontalsystems.solanakit.core.SolanaDatabaseManager
@@ -18,18 +15,16 @@ import io.horizontalsystems.solanakit.core.TokenAccountManager
 import io.horizontalsystems.solanakit.database.main.MainStorage
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.Address
-import io.horizontalsystems.solanakit.models.BufferInfoJsonAdapterFactory
 import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.RpcSource
 import io.horizontalsystems.solanakit.network.ConnectionManager
 import io.horizontalsystems.solanakit.noderpc.ApiSyncer
-import io.horizontalsystems.solanakit.noderpc.NftClient
 import io.horizontalsystems.solanakit.transactions.PendingTransactionSyncer
 import io.horizontalsystems.solanakit.transactions.SolanaFmService
-import io.horizontalsystems.solanakit.transactions.SolscanClient
 import io.horizontalsystems.solanakit.transactions.TransactionManager
 import io.horizontalsystems.solanakit.transactions.TransactionSyncer
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -39,8 +34,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import java.math.BigDecimal
 import java.util.Objects
 
@@ -82,29 +75,39 @@ class SolanaKit(
     val tokenBalanceSyncState: SyncState
         get() = syncManager.tokenBalanceSyncState
     val tokenBalanceSyncStateFlow: StateFlow<SyncState> = _tokenBalanceSyncStateFlow
-    val fungibleTokenAccountsFlow: Flow<List<FullTokenAccount>> = tokenAccountManager.newTokenAccountsFlow.map { tokenAccounts ->
-        tokenAccounts.filter { !it.mintAccount.isNft }
-    }
-    val nonFungibleTokenAccountsFlow: Flow<List<FullTokenAccount>> = tokenAccountManager.tokenAccountsFlow.map { tokenAccounts ->
-        tokenAccounts.filter { it.mintAccount.isNft }
-    }
+    val fungibleTokenAccountsFlow: Flow<List<FullTokenAccount>> =
+        tokenAccountManager.newTokenAccountsFlow.map { tokenAccounts ->
+            tokenAccounts.filter { !it.mintAccount.isNft }
+        }
+    val nonFungibleTokenAccountsFlow: Flow<List<FullTokenAccount>> =
+        tokenAccountManager.tokenAccountsFlow.map { tokenAccounts ->
+            tokenAccounts.filter { it.mintAccount.isNft }
+        }
 
     fun tokenAccount(mintAddress: String): FullTokenAccount? =
         tokenAccountManager.fullTokenAccount(mintAddress)
 
-    fun tokenAccountFlow(mintAddress: String): Flow<FullTokenAccount> = tokenAccountManager.tokenBalanceFlow(mintAddress)
+    fun tokenAccountFlow(mintAddress: String): Flow<FullTokenAccount> =
+        tokenAccountManager.tokenBalanceFlow(mintAddress)
 
     // Transactions API
     val transactionsSyncState: SyncState
         get() = syncManager.transactionsSyncState
     val transactionsSyncStateFlow: StateFlow<SyncState> = _transactionsSyncStateFlow
 
-    fun allTransactionsFlow(incoming: Boolean?): Flow<List<FullTransaction>> = transactionManager.allTransactionsFlow(incoming)
-    fun solTransactionsFlow(incoming: Boolean?): Flow<List<FullTransaction>> = transactionManager.solTransactionsFlow(incoming)
-    fun splTransactionsFlow(mintAddress: String, incoming: Boolean?): Flow<List<FullTransaction>> = transactionManager.splTransactionsFlow(mintAddress, incoming)
+    fun allTransactionsFlow(incoming: Boolean?): Flow<List<FullTransaction>> =
+        transactionManager.allTransactionsFlow(incoming)
+
+    fun solTransactionsFlow(incoming: Boolean?): Flow<List<FullTransaction>> =
+        transactionManager.solTransactionsFlow(incoming)
+
+    fun splTransactionsFlow(mintAddress: String, incoming: Boolean?): Flow<List<FullTransaction>> =
+        transactionManager.splTransactionsFlow(mintAddress, incoming)
 
     fun start() {
-        scope = CoroutineScope(Dispatchers.IO)
+        scope = CoroutineScope(Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
+            Log.d("SolanaKit", "Coroutine error: ${throwable.message}")
+        })
         scope?.launch {
             syncManager.start(this)
         }
@@ -115,12 +118,13 @@ class SolanaKit(
         scope?.cancel()
     }
 
-    fun refresh() {
-        if (scope?.isActive != true) return
+    fun refresh(): Boolean {
+        if (scope?.isActive != true) return false
 
         scope?.launch {
             syncManager.refresh(this)
         }
+        return true
     }
 
     fun debugInfo(): String {
@@ -164,10 +168,18 @@ class SolanaKit(
         _transactionsSyncStateFlow.tryEmit(syncState)
     }
 
-    suspend fun getAllTransactions(incoming: Boolean? = null, fromHash: String? = null, limit: Int? = null): List<FullTransaction> =
+    suspend fun getAllTransactions(
+        incoming: Boolean? = null,
+        fromHash: String? = null,
+        limit: Int? = null
+    ): List<FullTransaction> =
         transactionManager.getAllTransaction(incoming, fromHash, limit)
 
-    suspend fun getSolTransactions(incoming: Boolean? = null, fromHash: String? = null, limit: Int? = null): List<FullTransaction> =
+    suspend fun getSolTransactions(
+        incoming: Boolean? = null,
+        fromHash: String? = null,
+        limit: Int? = null
+    ): List<FullTransaction> =
         transactionManager.getSolTransaction(incoming, fromHash, limit)
 
     suspend fun getSplTransactions(
@@ -181,7 +193,12 @@ class SolanaKit(
     suspend fun sendSol(toAddress: Address, amount: Long, signer: Signer): FullTransaction =
         transactionManager.sendSol(toAddress, amount, signer.account)
 
-    suspend fun sendSpl(mintAddress: Address, toAddress: Address, amount: Long, signer: Signer): FullTransaction =
+    suspend fun sendSpl(
+        mintAddress: Address,
+        toAddress: Address,
+        amount: Long,
+        signer: Signer
+    ): FullTransaction =
         transactionManager.sendSpl(mintAddress, toAddress, amount, signer.account)
 
     fun fungibleTokenAccounts(): List<FullTokenAccount> =
@@ -197,8 +214,8 @@ class SolanaKit(
 
         override fun toString(): String = when (this) {
             is Syncing -> "Syncing ${progress?.let { "${it * 100}" } ?: ""}"
-            is NotSynced -> "NotSynced ${error.javaClass.simpleName} - message: ${error.message}"
-            else -> this.javaClass.simpleName
+            is NotSynced -> "NotSynced ${error.javaClass::class.simpleName} - message: ${error.message}"
+            else -> this.javaClass::class.simpleName ?: ""
         }
 
         override fun equals(other: Any?): Boolean {
@@ -245,45 +262,64 @@ class SolanaKit(
             solscanApiKey: String,
             debug: Boolean = false
         ): SolanaKit {
-            val httpClient = httpClient(debug)
-            val config = NetworkingRouterConfig(
-                listOf(MetadataAccountRule()),
-                listOf(MetadataAccountJsonAdapterFactory(), BufferInfoJsonAdapterFactory())
-            )
-
-            val router = OkHttpNetworkingRouter(rpcSource.endpoint, httpClient, config)
+            val router = HttpNetworkingRouter(rpcSource.endpoint)
             val connectionManager = ConnectionManager(application)
 
             val mainDatabase = SolanaDatabaseManager.getMainDatabase(application, walletId)
             val mainStorage = MainStorage(mainDatabase)
 
             val rpcApiClient = Api(router)
-            val nftClient = NftClient(rpcApiClient)
             val rpcAction = Action(rpcApiClient, listOf())
-            val apiSyncer = ApiSyncer(rpcApiClient, rpcSource.syncInterval, connectionManager, mainStorage)
+            val apiSyncer =
+                ApiSyncer(rpcApiClient, rpcSource.syncInterval, connectionManager, mainStorage)
             val address = Address(addressString)
 
             val balanceManager = BalanceManager(address.publicKey, rpcApiClient, mainStorage)
 
-            val transactionDatabase = SolanaDatabaseManager.getTransactionDatabase(application, walletId)
+            val transactionDatabase =
+                SolanaDatabaseManager.getTransactionDatabase(application, walletId)
             val transactionStorage = TransactionStorage(transactionDatabase, addressString)
-            val solscanClient = SolscanClient(solscanApiKey, debug)
-            val tokenAccountManager = TokenAccountManager(addressString, rpcApiClient, transactionStorage, mainStorage, SolanaFmService())
-            val transactionManager = TransactionManager(address, transactionStorage, rpcAction, tokenAccountManager)
-            val pendingTransactionSyncer = PendingTransactionSyncer(rpcApiClient, transactionStorage, transactionManager)
+            val tokenAccountManager = TokenAccountManager(
+                walletAddress = addressString,
+                rpcClient = rpcApiClient,
+                storage = transactionStorage,
+                mainStorage = mainStorage,
+                solanaFmService = SolanaFmService()
+            )
+            val transactionManager =
+                TransactionManager(
+                    address = address,
+                    storage = transactionStorage,
+                    rpcAction = rpcAction,
+                    tokenAccountManager = tokenAccountManager
+                )
+            val pendingTransactionSyncer =
+                PendingTransactionSyncer(rpcApiClient, transactionStorage, transactionManager)
             val transactionSyncer = TransactionSyncer(
-                address.publicKey,
-                rpcApiClient,
-                solscanClient,
-                nftClient,
-                transactionStorage,
-                transactionManager,
-                pendingTransactionSyncer
+                publicKey = address.publicKey,
+                rpcClient = rpcApiClient,
+                storage = transactionStorage,
+                transactionManager = transactionManager,
+                pendingTransactionSyncer = pendingTransactionSyncer
             )
 
-            val syncManager = SyncManager(apiSyncer, balanceManager, tokenAccountManager, transactionSyncer, transactionManager)
+            val syncManager = SyncManager(
+                apiSyncer,
+                balanceManager,
+                tokenAccountManager,
+                transactionSyncer,
+                transactionManager
+            )
 
-            val kit = SolanaKit(apiSyncer, balanceManager, tokenAccountManager, transactionManager, syncManager, rpcSource, address)
+            val kit = SolanaKit(
+                apiSyncer,
+                balanceManager,
+                tokenAccountManager,
+                transactionManager,
+                syncManager,
+                rpcSource,
+                address
+            )
             syncManager.listener = kit
 
             return kit
@@ -292,21 +328,6 @@ class SolanaKit(
         fun clear(context: Context, walletId: String) {
             SolanaDatabaseManager.clear(context, walletId)
         }
-
-        private fun httpClient(debug: Boolean): OkHttpClient {
-            val client = OkHttpClient.Builder()
-
-            if (debug) {
-                val loggingInterceptor = HttpLoggingInterceptor { message ->
-                    Log.e("solana-kit", message)
-                }.setLevel(HttpLoggingInterceptor.Level.BODY)
-
-                client.addInterceptor(loggingInterceptor)
-            }
-
-            return client.build()
-        }
-
     }
 
 }

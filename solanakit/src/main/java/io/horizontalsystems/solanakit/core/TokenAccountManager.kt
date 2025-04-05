@@ -3,16 +3,17 @@ package io.horizontalsystems.solanakit.core
 import android.util.Log
 import com.solana.api.Api
 import com.solana.core.PublicKey
-import com.solana.models.buffer.AccountInfo
-import com.solana.models.buffer.BufferInfo
+import com.solana.models.buffer.AccountInfoData
+import getTokenAccountBalanceWithRepeat
 import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.database.main.MainStorage
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
+import io.horizontalsystems.solanakit.models.AccountInfoFixed
 import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.MintAccount
 import io.horizontalsystems.solanakit.models.TokenAccount
 import io.horizontalsystems.solanakit.transactions.SolanaFmService
-import io.horizontalsystems.solanakit.transactions.getMultipleAccounts
+import io.horizontalsystems.solanakit.transactions.getMultipleAccountsFixed
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,7 +34,8 @@ class TokenAccountManager(
     private val solanaFmService: SolanaFmService
 ) {
 
-    var syncState: SolanaKit.SyncState = SolanaKit.SyncState.NotSynced(SolanaKit.SyncError.NotStarted())
+    var syncState: SolanaKit.SyncState =
+        SolanaKit.SyncState.NotSynced(SolanaKit.SyncError.NotStarted())
         private set(value) {
             if (value != field) {
                 field = value
@@ -91,7 +93,10 @@ class TokenAccountManager(
 
         val publicKeys = tokenAccounts.map { PublicKey.valueOf(it.address) }
         try {
-            val result = rpcClient.getMultipleAccounts(publicKeys, AccountInfo::class.java).await()
+            val result = rpcClient.getMultipleAccountsFixed(
+                serializer = AccountInfoData.serializer(),
+                accounts = publicKeys
+            ).await()
             handleBalance(tokenAccounts, result, initialSync)
         } catch (error: Throwable) {
             syncState = SolanaKit.SyncState.NotSynced(error)
@@ -102,10 +107,14 @@ class TokenAccountManager(
         }
     }
 
-    suspend fun addAccount(receivedTokenAccounts: List<TokenAccount>, existingMintAddresses: List<String>) {
+    suspend fun addAccount(
+        receivedTokenAccounts: List<TokenAccount>,
+        existingMintAddresses: List<String>
+    ) {
         storage.saveTokenAccounts(receivedTokenAccounts)
 
-        val tokenAccountUpdated: List<TokenAccount> = storage.getTokenAccounts(existingMintAddresses) + receivedTokenAccounts
+        val tokenAccountUpdated: List<TokenAccount> =
+            storage.getTokenAccounts(existingMintAddresses) + receivedTokenAccounts
         sync(tokenAccountUpdated.toSet().toList())
         handleNewTokenAccounts(receivedTokenAccounts)
     }
@@ -116,17 +125,25 @@ class TokenAccountManager(
     fun tokenAccounts(): List<FullTokenAccount> =
         storage.getFullTokenAccounts()
 
-    private fun handleBalance(
+    private suspend fun handleBalance(
         tokenAccounts: List<TokenAccount>,
-        tokenAccountsBufferInfo: List<BufferInfo<AccountInfo>?>,
+        tokenAccountsBufferInfo: List<AccountInfoFixed<AccountInfoData>?>,
         initialSync: Boolean
     ) {
         val updatedTokenAccounts = mutableListOf<TokenAccount>()
 
         for ((index, tokenAccount) in tokenAccounts.withIndex()) {
             tokenAccountsBufferInfo[index]?.let { account ->
-                val balance = account.data?.value?.lamports?.toBigDecimal() ?: tokenAccount.balance
-                updatedTokenAccounts.add(TokenAccount(tokenAccount.address, tokenAccount.mintAddress, balance, tokenAccount.decimals))
+                val balance = rpcClient.getTokenAccountBalanceWithRepeat(PublicKey.valueOf(tokenAccount.address))
+                    .getOrNull()?.amount ?: "0"
+                updatedTokenAccounts.add(
+                    TokenAccount(
+                        address = tokenAccount.address,
+                        mintAddress = tokenAccount.mintAddress,
+                        balance = balance.toBigDecimal(),
+                        decimals = tokenAccount.decimals
+                    )
+                )
             }
         }
 
@@ -152,7 +169,12 @@ class TokenAccountManager(
     fun addTokenAccount(walletAddress: String, mintAddress: String, decimals: Int) {
         if (!storage.tokenAccountExists(mintAddress)) {
             val userTokenMintAddress = associatedTokenAddress(walletAddress, mintAddress)
-            val tokenAccount = TokenAccount(userTokenMintAddress, mintAddress, BigDecimal.ZERO, decimals)
+            val tokenAccount = TokenAccount(
+                address = userTokenMintAddress,
+                mintAddress = mintAddress,
+                balance = BigDecimal.ZERO,
+                decimals = decimals
+            )
             val mintAccount = MintAccount(mintAddress, decimals)
             storage.addTokenAccount(tokenAccount)
             storage.addMintAccount(mintAccount)

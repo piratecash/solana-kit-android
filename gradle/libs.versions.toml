@@ -1,0 +1,27 @@
+[versions]
+hdWalletKitAndroid = "a74b51f"
+metaplexAndroid = "1.5.0"
+okhttp = "5.0.0-alpha.10"
+sol4k = "0.5.8"
+kotlinx-coroutines-android = "1.9.0"
+room = "2.6.1"
+okhttp-logging-interceptor = "4.12.0"
+jetbrainsKotlinJvm = "2.0.21"
+
+[libraries]
+hd-wallet-kit-android = { module = "com.github.horizontalsystems:hd-wallet-kit-android", version.ref = "hdWalletKitAndroid" }
+metaplex-android = { module = "com.github.metaplex-foundation:metaplex-android", version.ref = "metaplexAndroid" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+kotlinx-coroutines-rx2 = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-rx2", version.ref = "kotlinx-coroutines-android" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinx-coroutines-android" }
+
+room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+
+sol4k = { module = "org.sol4k:sol4k", version.ref = "sol4k" }
+
+okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp-logging-interceptor" }
+
+[plugins]
+jetbrains-kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "jetbrainsKotlinJvm" }

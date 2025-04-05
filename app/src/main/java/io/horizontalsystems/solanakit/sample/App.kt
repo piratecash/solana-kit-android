@@ -15,7 +15,7 @@ class App : Application() {
     }
 
     private fun assignKitClasses() {
-        val words = Configuration.defaultsWords.split(" ")
+        val words = Configuration.defaultsWords
         val seed = Mnemonic().toSeed(words, "")
         val address = Signer.address(seed)
 
