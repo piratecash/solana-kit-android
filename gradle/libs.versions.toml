@@ -7,7 +7,7 @@ kotlinx-coroutines-android = "1.9.0"
 room = "2.6.1"
 okhttp-logging-interceptor = "4.12.0"
 jetbrainsKotlinJvm = "2.0.21"
-solanakt = "5da8bfe"
+solanakt = "0f6072a"
 
 [libraries]
 hd-wallet-kit-android = { module = "com.github.horizontalsystems:hd-wallet-kit-android", version.ref = "hdWalletKitAndroid" }
