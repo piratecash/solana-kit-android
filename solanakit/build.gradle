@@ -53,12 +53,12 @@ android {
             }
 
         }
-        resolutionStrategy.eachDependency {
+        /*resolutionStrategy.eachDependency {
             if (requested.group == "com.github.metaplex-foundation" &&
                     requested.name == "SolanaKT") {
                 useTarget(libs.solanakt)
             }
-        }
+        }*/
     }
 }
 
@@ -83,9 +83,11 @@ dependencies {
     implementation libs.kotlinx.coroutines.android
 
     implementation(libs.sol4k)
+    implementation(libs.solanakt)
 
     implementation(libs.metaplex.android) {
         exclude group: 'com.github.metaplex-foundation.kborsh', module: 'kborsh-jvm'
+        exclude group: 'com.github.metaplex-foundation', module: 'SolanaKT'
     }
 
     implementation 'com.squareup.moshi:moshi-kotlin:1.15.1'
