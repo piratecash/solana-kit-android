@@ -115,7 +115,6 @@ class SolanaKit(
 
     fun stop() {
         syncManager.stop()
-        scope?.cancel()
     }
 
     fun refresh(): Boolean {
@@ -258,9 +257,7 @@ class SolanaKit(
             application: Application,
             addressString: String,
             rpcSource: RpcSource,
-            walletId: String,
-            solscanApiKey: String,
-            debug: Boolean = false
+            walletId: String
         ): SolanaKit {
             val router = HttpNetworkingRouter(rpcSource.endpoint)
             val connectionManager = ConnectionManager(application)

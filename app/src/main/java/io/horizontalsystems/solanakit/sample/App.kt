@@ -23,9 +23,7 @@ class App : Application() {
             application = instance,
             addressString = address,
             rpcSource = Configuration.rpcSource,
-            walletId = Configuration.walletId,
-            solscanApiKey = Configuration.solscanApiKey,
-            debug = true
+            walletId = Configuration.walletId
         )
 
         signer = Signer.getInstance(seed)

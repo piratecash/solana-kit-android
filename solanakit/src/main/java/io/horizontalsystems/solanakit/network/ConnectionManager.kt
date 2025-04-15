@@ -53,14 +53,8 @@ class ConnectionManager(context: Context) {
 
         override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
             super.onCapabilitiesChanged(network, networkCapabilities)
-
-            // Сheck at least one network with connection
-            hasValidInternet = activeNetworks.any { activeNetwork ->
-                val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
-                capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
-                        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-            }
-
+            hasValidInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    && networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             updatedConnectionState()
         }
 
