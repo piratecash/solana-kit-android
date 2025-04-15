@@ -21,7 +21,7 @@ class ConnectionManager(context: Context) {
     private var callback = ConnectionStatusCallback()
 
     init {
-        connectivityManager.registerNetworkCallback(NetworkRequest.Builder().build(), callback)
+        start()
     }
 
     fun recheckConnection() {
@@ -79,6 +79,16 @@ class ConnectionManager(context: Context) {
         isConnected = hasConnection && hasValidInternet
         if (oldValue != isConnected) {
             listener?.onConnectionChange()
+        }
+    }
+
+    fun start() {
+        stop() // to avoid double registration
+
+        try {
+            connectivityManager.registerNetworkCallback(NetworkRequest.Builder().build(), callback)
+        } catch (e: Exception) {
+            //already unregistered
         }
     }
 

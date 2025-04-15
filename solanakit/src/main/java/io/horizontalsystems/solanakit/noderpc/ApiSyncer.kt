@@ -64,6 +64,7 @@ class ApiSyncer(
         isStarted = true
         this.scope = scope
 
+        connectionManager.start()
         handleConnectionChange()
     }
 
