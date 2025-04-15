@@ -97,6 +97,7 @@ class ApiSyncer(
     private fun handleConnectionChange() {
         if (!isStarted) return
 
+        connectionManager.recheckConnection()
         if (connectionManager.isConnected) {
             state = SyncerState.Ready
             startTimer()

@@ -24,6 +24,10 @@ class ConnectionManager(context: Context) {
         connectivityManager.registerNetworkCallback(NetworkRequest.Builder().build(), callback)
     }
 
+    fun recheckConnection() {
+        isConnected = getInitialConnectionStatus()
+    }
+
     private fun getInitialConnectionStatus(): Boolean {
         val network = connectivityManager.activeNetwork ?: return false
 
@@ -49,8 +53,14 @@ class ConnectionManager(context: Context) {
 
         override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
             super.onCapabilitiesChanged(network, networkCapabilities)
-            hasValidInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    && networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+
+            // Сheck at least one network with connection
+            hasValidInternet = activeNetworks.any { activeNetwork ->
+                val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
+                capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+            }
+
             updatedConnectionState()
         }
 
