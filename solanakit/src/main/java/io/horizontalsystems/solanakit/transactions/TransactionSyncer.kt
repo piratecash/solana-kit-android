@@ -1,31 +1,24 @@
 package io.horizontalsystems.solanakit.transactions
 
-import com.metaplex.lib.programs.token_metadata.TokenMetadataProgram
-import com.metaplex.lib.programs.token_metadata.accounts.MetadataAccount
-import com.metaplex.lib.programs.token_metadata.accounts.MetaplexTokenStandard.FungibleAsset
-import com.metaplex.lib.programs.token_metadata.accounts.MetaplexTokenStandard.NonFungible
-import com.metaplex.lib.programs.token_metadata.accounts.MetaplexTokenStandard.NonFungibleEdition
+import SplTokenAccountWithPublicKey
+import android.util.Log
 import com.solana.api.Api
-import com.solana.api.getMultipleAccounts
+import com.solana.api.SignatureInformation
 import com.solana.core.PublicKey
-import com.solana.models.buffer.BufferInfo
-import com.solana.models.buffer.Mint
 import com.solana.programs.TokenProgram
+import getTokenAccountsByOwner
 import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.FullTokenTransfer
 import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.MintAccount
-import io.horizontalsystems.solanakit.models.TokenAccount
 import io.horizontalsystems.solanakit.models.TokenTransfer
 import io.horizontalsystems.solanakit.models.Transaction
-import io.horizontalsystems.solanakit.noderpc.NftClient
-import io.horizontalsystems.solanakit.noderpc.endpoints.SignatureInfo
 import io.horizontalsystems.solanakit.noderpc.endpoints.getSignaturesForAddress
 import java.math.BigDecimal
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 interface ITransactionListener {
     fun onUpdateTransactionSyncState(syncState: SolanaKit.SyncState)
@@ -34,110 +27,142 @@ interface ITransactionListener {
 class TransactionSyncer(
     private val publicKey: PublicKey,
     private val rpcClient: Api,
-    private val solscanClient: SolscanClient,
-    private val nftClient: NftClient,
     private val storage: TransactionStorage,
     private val transactionManager: TransactionManager,
     private val pendingTransactionSyncer: PendingTransactionSyncer
 ) {
-    var syncState: SolanaKit.SyncState = SolanaKit.SyncState.NotSynced(SolanaKit.SyncError.NotStarted())
-        private set(value) {
-            if (value != field) {
-                field = value
-                listener?.onUpdateTransactionSyncState(value)
-            }
-        }
+    private val _syncState = MutableStateFlow<SolanaKit.SyncState>(
+        SolanaKit.SyncState.NotSynced(SolanaKit.SyncError.NotStarted())
+    )
+    val syncState: StateFlow<SolanaKit.SyncState> = _syncState.asStateFlow()
 
     var listener: ITransactionListener? = null
 
-    suspend fun sync() {
-        if (syncState is SolanaKit.SyncState.Syncing) return
+    private fun updateSyncState(newState: SolanaKit.SyncState) {
+        _syncState.value = newState
+        listener?.onUpdateTransactionSyncState(newState)
+    }
 
-        syncState = SolanaKit.SyncState.Syncing()
+    suspend fun sync() {
+        if (_syncState.value is SolanaKit.SyncState.Syncing) return
+
+        updateSyncState(SolanaKit.SyncState.Syncing())
 
         pendingTransactionSyncer.sync()
 
-        syncState = SolanaKit.SyncState.Synced()
-//
-//        val lastTransactionHash = storage.lastNonPendingTransaction()?.hash
-//
-//        try {
-//            val rpcSignatureInfos = getSignaturesFromRpcNode(lastTransactionHash)
-//            val solTransfers = solscanClient.solTransfers(publicKey.toBase58(), storage.getSyncedBlockTime(solscanClient.solSyncSourceName)?.hash)
-//            val splTransfers = solscanClient.splTransfers(publicKey.toBase58(), storage.getSyncedBlockTime(solscanClient.splSyncSourceName)?.hash)
-//            val solscanExportedTxs = (solTransfers + splTransfers).sortedByDescending { it.blockTime }
-//            val mintAddresses = solscanExportedTxs.mapNotNull { it.mintAccountAddress }.toSet().toList()
-//            val mintAccounts = getMintAccounts(mintAddresses)
-//            val tokenAccounts = buildTokenAccounts(solscanExportedTxs, mintAccounts)
-//            val transactions = merge(rpcSignatureInfos, solscanExportedTxs, mintAccounts)
-//
-//            transactionManager.handle(transactions, tokenAccounts)
-//
-//            if (solTransfers.isNotEmpty()) {
-//                storage.setSyncedBlockTime(LastSyncedTransaction(solscanClient.solSyncSourceName, solTransfers.first().hash))
-//            }
-//
-//            if (splTransfers.isNotEmpty()) {
-//                storage.setSyncedBlockTime(LastSyncedTransaction(solscanClient.splSyncSourceName, splTransfers.first().hash))
-//            }
-//
-//            syncState = SolanaKit.SyncState.Synced()
-//        } catch (exception: Throwable) {
-//            syncState = SolanaKit.SyncState.NotSynced(exception)
-//        }
+        val lastTransactionHash = storage.lastNonPendingTransaction()?.hash
+
+        try {
+            val rpcTransactions = getSignaturesFromRpcNode(
+                pKey = publicKey,
+                lastTransactionHash = lastTransactionHash
+            ).apply { Log.d("TransactionSyncer", "rpcTransactions: ${this.size}") }
+                .mapNotNull { it.signature }
+                .mapNotNull { signature ->
+                    getTransactionInfo(signature)
+                }
+            val splTransfers = getTokenAccountsByOwner().map {
+                SplTokenAccountWithPublicKey(it.publicKey)
+            }.map {
+                getSignaturesFromRpcNode(
+                    pKey = PublicKey.valueOf(it.publicKey),
+                    lastTransactionHash = lastTransactionHash
+                )
+            }.flatten().apply { Log.d("TransactionSyncer", "token transactions: ${this.size}") }
+                .mapNotNull { it.signature }
+                .mapNotNull { signature ->
+                    getTransactionInfo(signature)
+                }
+            val mintAddresses =
+                splTransfers.mapNotNull { it.meta?.preTokenBalances?.firstOrNull()?.mint }.toSet()
+                    .toList()
+            val mintAccounts = getMintAccounts(mintAddresses)
+            val transactions = merge(
+                rpcTransactions = rpcTransactions + splTransfers,
+                mintAccounts = mintAccounts
+            )
+
+            transactionManager.handle(transactions)
+            updateSyncState(SolanaKit.SyncState.Synced())
+        } catch (exception: Throwable) {
+            exception.printStackTrace()
+            updateSyncState(SolanaKit.SyncState.NotSynced(exception))
+        }
     }
 
-    private fun merge(rpcSignatureInfos: List<SignatureInfo>, solscanTxsMap: List<SolscanTransaction>, mintAccounts: Map<String, MintAccount>): List<FullTransaction> {
+    private fun toBigNumWithMovePointLeft(value: Long?, shiftAmount: Int = 9) =
+        value?.toBigDecimal()
+            ?.movePointLeft(shiftAmount)?.stripTrailingZeros()
+
+    private fun merge(
+        rpcTransactions: List<TransactionResult>,
+        mintAccounts: Map<String, MintAccount>
+    ): List<FullTransaction> {
         val transactions = mutableMapOf<String, FullTransaction>()
 
-        for (signatureInfo in rpcSignatureInfos) {
-            signatureInfo.blockTime?.let { blockTime ->
-                val transaction = Transaction(signatureInfo.signature, blockTime, error = signatureInfo.err?.toString())
-                transactions[signatureInfo.signature] = FullTransaction(transaction, listOf())
-            }
-        }
-
-        for ((hash, solscanTxs) in solscanTxsMap.groupBy { it.hash }) {
-            try {
-                val existingTransaction = transactions[hash]?.transaction
-                val solscanTx = solscanTxs.first()
-                val mergedTransaction = Transaction(
-                    hash,
-                    existingTransaction?.timestamp ?: solscanTx.blockTime,
-                    solscanTx.fee?.toBigDecimalOrNull(),
-                    solscanTx.solTransferSource,
-                    solscanTx.solTransferDestination,
-                    solscanTx.solAmount?.toBigDecimal(),
-                    existingTransaction?.error
-                )
-
-                val tokenTransfers: List<FullTokenTransfer> = solscanTxs.mapNotNull { solscanTx ->
-                    val mintAddress = solscanTx.mintAccountAddress ?: return@mapNotNull null
-                    val mintAccount = mintAccounts[mintAddress] ?: return@mapNotNull null
-                    val amount = solscanTx.splBalanceChange?.toBigDecimal() ?: return@mapNotNull null
-
-                    FullTokenTransfer(
-                        TokenTransfer(hash, mintAddress, amount > BigDecimal.ZERO, amount),
-                        mintAccount
+        for (signatureInfo in rpcTransactions) {
+            signatureInfo.blockTime.let { blockTime ->
+                val postTokenBalances = signatureInfo.meta?.postTokenBalances?.firstOrNull()
+                val preTokenBalances = signatureInfo.meta?.preTokenBalances?.firstOrNull()
+                val amount = if (postTokenBalances != null && preTokenBalances != null) {
+                    null //need to set amount NULL if TOKEN transfer
+                } else {
+                    BigDecimal(
+                        (signatureInfo.meta?.preBalances?.getOrNull(0) ?: 0L) -
+                                (signatureInfo.meta?.postBalances?.getOrNull(0) ?: 0L)
                     )
                 }
-
-                transactions[hash] = FullTransaction(mergedTransaction, tokenTransfers)
-            } catch (e: Throwable) {
-                continue
+                val transaction = Transaction(
+                    hash = signatureInfo.transaction?.signatures?.firstOrNull().orEmpty(),
+                    timestamp = blockTime,
+                    fee = toBigNumWithMovePointLeft(signatureInfo.meta?.fee),
+                    from = signatureInfo.transaction?.message?.accountKeys?.firstOrNull().orEmpty(),
+                    to = signatureInfo.transaction?.message?.accountKeys?.getOrNull(1).orEmpty(),
+                    error = signatureInfo.meta?.err?.toString(),
+                    amount = amount,
+                    pending = false
+                )
+                var tokenTransfers: List<FullTokenTransfer> = emptyList()
+                if (postTokenBalances != null && preTokenBalances != null) {
+                    val amount = (preTokenBalances.uiTokenAmount.amount?.toBigDecimal()
+                        ?: BigDecimal.ZERO) - (postTokenBalances.uiTokenAmount.amount?.toBigDecimal()
+                        ?: BigDecimal.ZERO)
+                    mintAccounts[postTokenBalances.mint]?.let { mintAccount ->
+                        tokenTransfers = listOf(
+                            FullTokenTransfer(
+                                tokenTransfer = TokenTransfer(
+                                    transactionHash = signatureInfo.transaction?.signatures?.firstOrNull()
+                                        .orEmpty(),
+                                    mintAddress = postTokenBalances.mint,
+                                    incoming = amount > BigDecimal.ZERO,
+                                    amount = amount.abs()
+                                ),
+                                mintAccount = mintAccount
+                            )
+                        )
+                    }
+                }
+                transactions[signatureInfo.transaction?.signatures?.firstOrNull().orEmpty()] =
+                    FullTransaction(transaction = transaction, tokenTransfers = tokenTransfers)
             }
         }
-
         return transactions.values.toList()
     }
 
-    private suspend fun getSignaturesFromRpcNode(lastTransactionHash: String?): List<SignatureInfo> {
-        val signatureObjects = mutableListOf<SignatureInfo>()
-        var signatureObjectsChunk = listOf<SignatureInfo>()
+    private suspend fun getSignaturesFromRpcNode(
+        pKey: PublicKey,
+        lastTransactionHash: String?
+    ): List<SignatureInformation> {
+        val signatureObjects = mutableListOf<SignatureInformation>()
+        var signatureObjectsChunk = listOf<SignatureInformation>()
 
         do {
             val lastSignature = signatureObjectsChunk.lastOrNull()?.signature
-            signatureObjectsChunk = getSignaturesChunk(lastTransactionHash, lastSignature)
+            signatureObjectsChunk = getSignaturesChunk(
+                lastTransactionHash = lastTransactionHash,
+                pKey = pKey,
+                before = lastSignature
+            )
             signatureObjects.addAll(signatureObjectsChunk)
 
         } while (signatureObjectsChunk.size == rpcSignaturesCount)
@@ -145,98 +170,65 @@ class TransactionSyncer(
         return signatureObjects
     }
 
-    private suspend fun getSignaturesChunk(lastTransactionHash: String?, before: String? = null) = suspendCoroutine<List<SignatureInfo>> { continuation ->
-        rpcClient.getSignaturesForAddress(publicKey, until = lastTransactionHash, before = before, limit = rpcSignaturesCount) { result ->
-            result.onSuccess { signatureObjects ->
-                continuation.resume(signatureObjects)
-            }
-
-            result.onFailure { exception ->
-                continuation.resumeWithException(exception)
-            }
-        }
+    private suspend fun getTokenAccountsByOwner(): List<SplTokenAccountWithPublicKey> {
+        return rpcClient.getTokenAccountsByOwner(publicKey).getOrNull() ?: listOf()
     }
 
-    private suspend fun getMintAccounts(mintAddresses: List<String>) : Map<String, MintAccount> {
+    private suspend fun getTransactionInfo(signature: String): TransactionResult? =
+        rpcClient.getTransaction(signature).getOrNull()
+
+    private suspend fun getSignaturesChunk(
+        lastTransactionHash: String?,
+        pKey: PublicKey,
+        before: String? = null
+    ): List<SignatureInformation> {
+        return rpcClient.getSignaturesForAddress(
+            account = pKey,
+            until = lastTransactionHash,
+            before = before,
+            limit = rpcSignaturesCount
+        ).getOrNull() ?: listOf()
+    }
+
+    private suspend fun getMintAccounts(mintAddresses: List<String>): Map<String, MintAccount> {
         if (mintAddresses.isEmpty()) {
             return mutableMapOf()
         }
 
         val publicKeys = mintAddresses.map { PublicKey.valueOf(it) }
 
-        val mintAccountData = suspendCoroutine<List<BufferInfo<Mint>?>> { continuation ->
-            rpcClient.getMultipleAccounts(publicKeys, Mint::class.java) { result ->
-                result.onSuccess {
-                    continuation.resume(it)
-                }
-
-                result.onFailure { exception ->
-                    continuation.resumeWithException(exception)
-                }
-            }
-        }
-
-        val metadataAccountsMap = mutableMapOf<String, MetadataAccount>()
-        nftClient.findAllByMintList(publicKeys).getOrThrow()
-            .filterNotNull()
-            .filter { it.owner == tokenMetadataProgramId }
-            .forEach {
-                val metadata = it.data?.value ?: return@forEach
-                metadataAccountsMap[metadata.mint.toBase58()] = metadata
-            }
-
         val mintAccounts = mutableMapOf<String, MintAccount>()
 
-        for ((index, mintAddress) in mintAddresses.withIndex()) {
-            val account = mintAccountData[index] ?: continue
-            val owner = account.owner
-            val mint = account.data?.value
+        try {
+            rpcClient.getMultipleMintAccountsInfo(
+                accounts = publicKeys
+            ).getOrThrow()?.forEachIndexed { index, account ->
+                val owner = account.owner
+                val mint = account.data
+                if (owner != tokenProgramId || mint == null) return@forEachIndexed
+                val mintAddress = mintAddresses.getOrNull(index) ?: return@forEachIndexed
 
-            if (owner != tokenProgramId || mint == null) continue
-
-            val metadataAccount = metadataAccountsMap[mintAddress]
-
-            val isNft = when {
-                mint.decimals != 0 -> false
-                mint.supply == 1L && mint.mintAuthority == null -> true
-                metadataAccount?.tokenStandard == NonFungible -> true
-                metadataAccount?.tokenStandard == FungibleAsset -> true
-                metadataAccount?.tokenStandard == NonFungibleEdition -> true
-                else -> false
+                val isNft = when {
+                    mint.parsed.info.decimals != 0 -> false
+                    mint.parsed.info.supply == "1" && mint.parsed.info.mintAuthority == null -> true
+                    else -> false
+                }
+                mintAccounts[mintAddress] = MintAccount(
+                    address = mintAddress,
+                    decimals = mint.parsed.info.decimals,
+                    supply = mint.parsed.info.supply.toLongOrNull(),
+                    isNft = isNft,
+                )
             }
-
-            val collectionAddress = metadataAccount?.collection?.let {
-                if (!it.verified) return@let null
-                it.key.toBase58()
-            }
-
-            val mintAccount = MintAccount(
-                mintAddress, mint.decimals, mint.supply,
-                isNft,
-                metadataAccount?.data?.name,
-                metadataAccount?.data?.symbol,
-                metadataAccount?.data?.uri,
-                collectionAddress
-            )
-
-            mintAccounts[mintAddress] = mintAccount
+        } catch (e: Throwable) {
+            e.printStackTrace()
         }
-
         return mintAccounts
     }
 
-    private fun buildTokenAccounts(solscanExportedTxs: List<SolscanTransaction>, mintAccounts: Map<String, MintAccount>): List<TokenAccount> =
-        solscanExportedTxs.mapNotNull { solscanTx ->
-            val mintAccount = solscanTx.mintAccountAddress?.let { mintAccounts[it] } ?: return@mapNotNull null
-            val tokenAccountAddress = solscanTx.tokenAccountAddress ?: return@mapNotNull null
-
-            TokenAccount(tokenAccountAddress, mintAccount.address, BigDecimal.ZERO, mintAccount.decimals)
-        }.toSet().toMutableList()
-
     companion object {
         val tokenProgramId = TokenProgram.PROGRAM_ID.toBase58()
-        val tokenMetadataProgramId = TokenMetadataProgram.publicKey.toBase58()
-        const val rpcSignaturesCount = 1000
+        const val rpcSignaturesCount = 2
     }
 
 }

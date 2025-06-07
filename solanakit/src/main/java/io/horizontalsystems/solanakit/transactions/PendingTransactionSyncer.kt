@@ -2,7 +2,6 @@ package io.horizontalsystems.solanakit.transactions
 
 import com.solana.api.Api
 import com.solana.rxsolana.api.getBlockHeight
-import com.solana.rxsolana.api.getConfirmedTransaction
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.Transaction
 import kotlinx.coroutines.rx2.await
@@ -33,13 +32,13 @@ class PendingTransactionSyncer(
 
         pendingTransactions.forEach { pendingTx ->
             try {
-                val confirmedTransaction = withTimeout(2000) {
-                    rpcClient.getConfirmedTransaction(pendingTx.hash).await()
+                val confirmedTransaction = withTimeout(20000) {
+                    rpcClient.getTransaction(pendingTx.hash)
                 }
 
-                confirmedTransaction.meta?.let { meta ->
+                confirmedTransaction.onSuccess { transaction ->
                     updatedTransactions.add(
-                        pendingTx.copy(pending = false, error = meta.err?.toString())
+                        pendingTx.copy(pending = false, error = transaction.meta?.err?.toString())
                     )
                 }
 

@@ -2,19 +2,22 @@ plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
 }
+def localProperties = new Properties()
+localProperties.load(new FileInputStream(rootProject.file("local.properties")))
 
 android {
-    compileSdk 33
-
+    compileSdk 34
+    android.buildFeatures.buildConfig true
     defaultConfig {
         applicationId 'io.horizontalsystems.solanakit'
         minSdk 27
-        targetSdk 33
+        targetSdk 34
         versionCode 1
         versionName "1.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         applicationIdSuffix 'sample'
+        buildConfigField "String", "WORDS", "${localProperties['words']}"
     }
 
     buildTypes {
@@ -35,12 +38,24 @@ android {
     }
     namespace 'io.horizontalsystems.solanakit.sample'
 
+    def bcprovVersionsToRedirect = [
+            'bcprov-jdk15on:1.65',
+            'bcprov-jdk15on:1.65.01',
+            'bcprov-jdk15on:1.66',
+            'bcprov-jdk15on:1.70',
+            'bcprov-jdk15to18:1.65',
+            'bcprov-jdk15to18:1.65.01',
+            'bcprov-jdk15to18:1.68',
+            'bcprov-jdk15to18:1.69'
+    ]
     configurations.all { c ->
         c.resolutionStrategy.dependencySubstitution {
-            substitute module('org.bouncycastle:bcprov-jdk15to18:1.68') using module('org.bouncycastle:bcprov-jdk15on:1.65')
+            bcprovVersionsToRedirect.each { moduleId ->
+                def (name, version) = moduleId.split(':')
+                substitute module("org.bouncycastle:$name:$version") using module("org.bouncycastle:bcprov-jdk15to18:1.80")
+            }
         }
     }
-
 }
 
 dependencies {
@@ -53,7 +68,10 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.1'
     implementation 'androidx.navigation:navigation-fragment-ktx:2.6.0'
     implementation 'androidx.navigation:navigation-ui-ktx:2.6.0'
-    implementation 'com.github.horizontalsystems:hd-wallet-kit-android:a74b51f'
+    implementation(libs.hd.wallet.kit.android) {
+        exclude group: 'org.bouncycastle', module: 'bcprov-jdk15on'
+        exclude group: 'org.bouncycastle', module: 'bcprov-jdk15to18'
+    }
 
     implementation project(':solanakit')
 

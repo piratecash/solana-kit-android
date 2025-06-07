@@ -1,7 +1,12 @@
 package io.horizontalsystems.solanakit.database.transaction
 
 import androidx.sqlite.db.SimpleSQLiteQuery
-import io.horizontalsystems.solanakit.models.*
+import io.horizontalsystems.solanakit.models.FullTokenAccount
+import io.horizontalsystems.solanakit.models.FullTransaction
+import io.horizontalsystems.solanakit.models.LastSyncedTransaction
+import io.horizontalsystems.solanakit.models.MintAccount
+import io.horizontalsystems.solanakit.models.TokenAccount
+import io.horizontalsystems.solanakit.models.Transaction
 
 class TransactionStorage(
     database: TransactionDatabase,
@@ -36,7 +41,11 @@ class TransactionStorage(
         mintAccountDao.insert(fullTokenTransfers.map { it.mintAccount }.toSet().toList())
     }
 
-    suspend fun getTransactions(incoming: Boolean?, fromHash: String?, limit: Int?): List<FullTransaction> {
+    suspend fun getTransactions(
+        incoming: Boolean?,
+        fromHash: String?,
+        limit: Int?
+    ): List<FullTransaction> {
         val condition = incoming?.let {
             if (incoming) "((tx.amount IS NOT NULL AND tx.`to` = '$address') OR tt.incoming)"
             else "((tx.amount IS NOT NULL AND tx.`from` = '$address') OR NOT(tt.incoming))"
@@ -45,7 +54,11 @@ class TransactionStorage(
         return getTransactions(condition, incoming != null, fromHash, limit)
     }
 
-    suspend fun getSolTransactions(incoming: Boolean?, fromHash: String?, limit: Int?): List<FullTransaction> {
+    suspend fun getSolTransactions(
+        incoming: Boolean?,
+        fromHash: String?,
+        limit: Int?
+    ): List<FullTransaction> {
         val condition = incoming?.let {
             if (incoming) "(tx.amount IS NOT NULL AND tx.`to` = '$address')"
             else "(tx.amount IS NOT NULL AND tx.`from` = '$address')"
@@ -54,7 +67,12 @@ class TransactionStorage(
         return getTransactions(condition, false, fromHash, limit)
     }
 
-    suspend fun getSplTransactions(mintAddress: String, incoming: Boolean?, fromHash: String?, limit: Int?): List<FullTransaction> {
+    suspend fun getSplTransactions(
+        mintAddress: String,
+        incoming: Boolean?,
+        fromHash: String?,
+        limit: Int?
+    ): List<FullTransaction> {
         val condition = incoming?.let {
             val incomingCondition = if (incoming) "tt.incoming" else "NOT(tt.incoming)"
             "(tt.mintAddress = '$mintAddress' AND $incomingCondition)"
@@ -63,7 +81,12 @@ class TransactionStorage(
         return getTransactions(condition, true, fromHash, limit)
     }
 
-    private suspend fun getTransactions(typeCondition: String?, joinTokenTransfers: Boolean, fromHash: String?, limit: Int?): List<FullTransaction> {
+    private suspend fun getTransactions(
+        typeCondition: String?,
+        joinTokenTransfers: Boolean,
+        fromHash: String?,
+        limit: Int?
+    ): List<FullTransaction> {
         val whereConditions = mutableListOf<String>()
         typeCondition?.let { whereConditions.add(it) }
 
@@ -81,7 +104,8 @@ class TransactionStorage(
             whereConditions.add(fromCondition)
         }
 
-        val whereClause = if (whereConditions.isNotEmpty()) "WHERE ${whereConditions.joinToString(" AND ")}" else ""
+        val whereClause =
+            if (whereConditions.isNotEmpty()) "WHERE ${whereConditions.joinToString(" AND ")}" else ""
         val orderClause = "ORDER BY tx.timestamp DESC, HEX(tx.hash) DESC"
         val limitClause = limit?.let { "LIMIT $limit" } ?: ""
 
@@ -94,7 +118,8 @@ class TransactionStorage(
                       $limitClause
                       """
 
-        return transactionsDao.getTransactions(SimpleSQLiteQuery(sqlQuery)).map { it.fullTransaction }
+        return transactionsDao.getTransactions(SimpleSQLiteQuery(sqlQuery))
+            .map { it.fullTransaction }
     }
 
     suspend fun getMintAccount(address: String): MintAccount? =
@@ -108,7 +133,8 @@ class TransactionStorage(
                       WHERE tx.hash IN (${hashes.joinToString(", ", "'", "'")})
                       """
 
-        return transactionsDao.getTransactions(SimpleSQLiteQuery(sqlQuery)).map { it.fullTransaction }
+        return transactionsDao.getTransactions(SimpleSQLiteQuery(sqlQuery))
+            .map { it.fullTransaction }
     }
 
     fun saveTokenAccounts(tokenAccounts: List<TokenAccount>) {

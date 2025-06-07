@@ -6,12 +6,14 @@ import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.database.main.MainStorage
 import io.horizontalsystems.solanakit.network.ConnectionManager
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.rx2.await
+import kotlinx.coroutines.withContext
 import kotlin.time.DurationUnit
 import kotlin.time.toDuration
 
@@ -62,6 +64,7 @@ class ApiSyncer(
         isStarted = true
         this.scope = scope
 
+        connectionManager.start()
         handleConnectionChange()
     }
 
@@ -74,7 +77,7 @@ class ApiSyncer(
         stopTimer()
     }
 
-    private suspend fun sync() {
+    private suspend fun sync() = withContext(Dispatchers.IO) {
         try {
             val blockHeight = api.getBlockHeight().await()
             handleBlockHeight(blockHeight)
@@ -95,6 +98,7 @@ class ApiSyncer(
     private fun handleConnectionChange() {
         if (!isStarted) return
 
+        connectionManager.recheckConnection()
         if (connectionManager.isConnected) {
             state = SyncerState.Ready
             startTimer()

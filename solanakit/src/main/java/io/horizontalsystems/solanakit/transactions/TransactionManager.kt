@@ -10,7 +10,6 @@ import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.Address
 import io.horizontalsystems.solanakit.models.FullTokenTransfer
 import io.horizontalsystems.solanakit.models.FullTransaction
-import io.horizontalsystems.solanakit.models.TokenAccount
 import io.horizontalsystems.solanakit.models.TokenTransfer
 import io.horizontalsystems.solanakit.models.Transaction
 import kotlinx.coroutines.flow.Flow
@@ -26,7 +25,7 @@ import java.math.BigDecimal
 import java.time.Instant
 
 class TransactionManager(
-    private val address: Address,
+    address: Address,
     private val storage: TransactionStorage,
     private val rpcAction: Action,
     private val tokenAccountManager: TokenAccountManager
@@ -36,39 +35,60 @@ class TransactionManager(
     private val _transactionsFlow = MutableStateFlow<List<FullTransaction>>(listOf())
     val transactionsFlow: StateFlow<List<FullTransaction>> = _transactionsFlow
 
-    fun allTransactionsFlow(incoming: Boolean?): Flow<List<FullTransaction>> = _transactionsFlow.map { txList ->
-        val incoming = incoming ?: return@map txList
+    fun allTransactionsFlow(incoming: Boolean?): Flow<List<FullTransaction>> =
+        _transactionsFlow.map { txList ->
+            val incoming = incoming ?: return@map txList
 
-        txList.filter { fullTransaction ->
-            hasSolTransfer(fullTransaction, incoming) || fullTransaction.tokenTransfers.any { it.tokenTransfer.incoming == incoming }
-        }
-    }.filter { it.isNotEmpty() }
+            txList.filter { fullTransaction ->
+                hasSolTransfer(
+                    fullTransaction,
+                    incoming
+                ) || fullTransaction.tokenTransfers.any { it.tokenTransfer.incoming == incoming }
+            }
+        }.filter { it.isNotEmpty() }
 
-    fun solTransactionsFlow(incoming: Boolean?): Flow<List<FullTransaction>> = _transactionsFlow.map { txList ->
-        txList.filter { hasSolTransfer(it, incoming) }
-    }.filter { it.isNotEmpty() }
+    fun solTransactionsFlow(incoming: Boolean?): Flow<List<FullTransaction>> =
+        _transactionsFlow.map { txList ->
+            txList.filter { hasSolTransfer(it, incoming) }
+        }.filter { it.isNotEmpty() }
 
-    fun splTransactionsFlow(mintAddress: String, incoming: Boolean?): Flow<List<FullTransaction>> = _transactionsFlow.map { txList ->
-        txList.filter { fullTransaction ->
-            hasSplTransfer(mintAddress, fullTransaction.tokenTransfers, incoming)
-        }
-    }.filter { it.isNotEmpty() }
+    fun splTransactionsFlow(mintAddress: String, incoming: Boolean?): Flow<List<FullTransaction>> =
+        _transactionsFlow.map { txList ->
+            txList.filter { fullTransaction ->
+                hasSplTransfer(mintAddress, fullTransaction.tokenTransfers, incoming)
+            }
+        }.filter { it.isNotEmpty() }
 
 
-    suspend fun getAllTransaction(incoming: Boolean?, fromHash: String?, limit: Int?): List<FullTransaction> =
+    suspend fun getAllTransaction(
+        incoming: Boolean?,
+        fromHash: String?,
+        limit: Int?
+    ): List<FullTransaction> =
         storage.getTransactions(incoming, fromHash, limit)
 
-    suspend fun getSolTransaction(incoming: Boolean?, fromHash: String?, limit: Int?): List<FullTransaction> =
+    suspend fun getSolTransaction(
+        incoming: Boolean?,
+        fromHash: String?,
+        limit: Int?
+    ): List<FullTransaction> =
         storage.getSolTransactions(incoming, fromHash, limit)
 
-    suspend fun getSplTransaction(mintAddress: String, incoming: Boolean?, fromHash: String?, limit: Int?): List<FullTransaction> =
+    suspend fun getSplTransaction(
+        mintAddress: String,
+        incoming: Boolean?,
+        fromHash: String?,
+        limit: Int?
+    ): List<FullTransaction> =
         storage.getSplTransactions(mintAddress, incoming, fromHash, limit)
 
-    suspend fun handle(syncedTransactions: List<FullTransaction>, syncedTokenAccounts: List<TokenAccount>) {
+    suspend fun handle(syncedTransactions: List<FullTransaction>) {
         val existingMintAddresses = mutableListOf<String>()
 
         if (syncedTransactions.isNotEmpty()) {
-            val existingTransactionsMap = storage.getFullTransactions(syncedTransactions.map { it.transaction.hash }).groupBy { it.transaction.hash }
+            val existingTransactionsMap =
+                storage.getFullTransactions(syncedTransactions.map { it.transaction.hash })
+                    .groupBy { it.transaction.hash }
             val transactions = syncedTransactions.map { syncedTx ->
                 val existingTx = existingTransactionsMap[syncedTx.transaction.hash]?.firstOrNull()
 
@@ -87,7 +107,7 @@ class TransactionManager(
                             amount = syncedTxHeader.amount ?: existingTxHeader.amount,
                             error = syncedTxHeader.error,
                             pending = syncedTxHeader.pending,
-                            ),
+                        ),
                         tokenTransfers = syncedTx.tokenTransfers.ifEmpty {
                             for (tokenTransfer in existingTx.tokenTransfers) {
                                 existingMintAddresses.add(tokenTransfer.mintAccount.address)
@@ -101,10 +121,6 @@ class TransactionManager(
 
             storage.addTransactions(transactions)
             _transactionsFlow.tryEmit(transactions)
-        }
-
-        if (syncedTokenAccounts.isNotEmpty() || existingMintAddresses.isNotEmpty()) {
-            tokenAccountManager.addAccount(syncedTokenAccounts.toSet().toList(), existingMintAddresses.toSet().toList())
         }
     }
 
@@ -120,7 +136,11 @@ class TransactionManager(
                 ((incoming && fullTransaction.transaction.to == addressString) || (!incoming && fullTransaction.transaction.from == addressString))
     }
 
-    private fun hasSplTransfer(mintAddress: String, tokenTransfers: List<FullTokenTransfer>, incoming: Boolean?): Boolean =
+    private fun hasSplTransfer(
+        mintAddress: String,
+        tokenTransfers: List<FullTokenTransfer>,
+        incoming: Boolean?
+    ): Boolean =
         tokenTransfers.any { fullTokenTransfer ->
             if (fullTokenTransfer.mintAccount.address != mintAddress) return false
             val incoming = incoming ?: return@any true
@@ -167,10 +187,16 @@ class TransactionManager(
         return listOf(computeUnitLimit, computeUnitPrice)
     }
 
-    suspend fun sendSpl(mintAddress: Address, toAddress: Address, amount: Long, signerAccount: Account): FullTransaction {
+    suspend fun sendSpl(
+        mintAddress: Address,
+        toAddress: Address,
+        amount: Long,
+        signerAccount: Account
+    ): FullTransaction {
         val mintAddressString = mintAddress.publicKey.toBase58()
-        val fullTokenAccount = tokenAccountManager.getFullTokenAccountByMintAddress(mintAddressString)
-            ?: throw Exception("TokenAccount not found for $mintAddressString")
+        val fullTokenAccount =
+            tokenAccountManager.getFullTokenAccountByMintAddress(mintAddressString)
+                ?: throw Exception("TokenAccount not found for $mintAddressString")
         val tokenAccount = fullTokenAccount.tokenAccount
         val mintAccount = fullTokenAccount.mintAccount
 
@@ -192,6 +218,8 @@ class TransactionManager(
             Transaction(
                 hash = transactionHash,
                 timestamp = Instant.now().epochSecond,
+                from = addressString,
+                to = toAddress.publicKey.toBase58(),
                 fee = SolanaKit.fee,
                 pending = true,
                 blockHash = blockHash.blockhash,
@@ -200,7 +228,12 @@ class TransactionManager(
             ),
             listOf(
                 FullTokenTransfer(
-                    TokenTransfer(transactionHash, mintAddressString, false, amount.toBigDecimal()),
+                    TokenTransfer(
+                        transactionHash = transactionHash,
+                        mintAddress = mintAddressString,
+                        incoming = false,
+                        amount = -amount.toBigDecimal()
+                    ),
                     mintAccount
                 )
             )

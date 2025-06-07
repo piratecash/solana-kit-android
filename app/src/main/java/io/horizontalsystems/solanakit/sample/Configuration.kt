@@ -6,5 +6,5 @@ object Configuration {
     val rpcSource: RpcSource = RpcSource.TritonOne
     const val solscanApiKey: String = ""
     const val walletId = "walletId"
-    const val defaultsWords = ""
+    val defaultsWords = BuildConfig.WORDS.split(" ")
 }
