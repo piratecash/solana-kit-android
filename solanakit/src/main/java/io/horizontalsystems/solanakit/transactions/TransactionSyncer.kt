@@ -112,30 +112,24 @@ class TransactionSyncer(
                                 (signatureInfo.meta?.postBalances?.getOrNull(0) ?: 0L)
                     )
                 }
-                val transferInstruction = signatureInfo.transaction?.message?.instructions
-                    ?.firstOrNull { instr ->
-                        val programId = instr.programIdIndex
-                            ?.toInt()
-                            ?.let { idx -> signatureInfo.transaction.message.accountKeys.getOrNull(idx) }
-                        programId == WellKnownPrograms.SYSTEM_PROGRAM && (instr.accounts?.size ?: 0) >= 2
-                    }
+                val transferInstruction = signatureInfo.transaction?.message?.instructions?.find {
+                    SolanaInstructionParser.parseInstruction(it, signatureInfo.transaction.message.accountKeys) == SystemProgramInstruction.TRANSFER
+                }
 
                 val from = transferInstruction?.accounts?.getOrNull(0)
                     ?.toInt()
                     ?.let { idx -> signatureInfo.transaction.message.accountKeys.getOrNull(idx) }
-                    .orEmpty()
 
                 val to = transferInstruction?.accounts?.getOrNull(1)
                     ?.toInt()
                     ?.let { idx -> signatureInfo.transaction.message.accountKeys.getOrNull(idx) }
-                    .orEmpty()
 
                 val transaction = Transaction(
                     hash = signatureInfo.transaction?.signatures?.firstOrNull().orEmpty(),
                     timestamp = blockTime,
                     fee = toBigNumWithMovePointLeft(signatureInfo.meta?.fee),
-                    from = from,
-                    to = to,
+                    from = from ?: signatureInfo.transaction?.message?.accountKeys?.firstOrNull().orEmpty(),
+                    to = to ?: signatureInfo.transaction?.message?.accountKeys?.getOrNull(1).orEmpty(),
                     error = signatureInfo.meta?.err?.toString(),
                     amount = amount,
                     pending = false
