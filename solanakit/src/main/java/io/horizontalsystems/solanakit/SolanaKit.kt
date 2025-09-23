@@ -296,7 +296,9 @@ class SolanaKit(
             application: Application,
             addressString: String,
             rpcSource: RpcSource,
-            walletId: String
+            walletId: String,
+            limitFirstTimeTransactionCount: Int = -1,
+            limitTimeTransactionCount: Int = -1
         ): SolanaKit {
             val router = HttpNetworkingRouter(rpcSource.endpoint)
             val connectionManager = ConnectionManager(application)
@@ -336,7 +338,9 @@ class SolanaKit(
                 rpcClient = rpcApiClient,
                 storage = transactionStorage,
                 transactionManager = transactionManager,
-                pendingTransactionSyncer = pendingTransactionSyncer
+                pendingTransactionSyncer = pendingTransactionSyncer,
+                limitFirstTimeTransactionCount = limitFirstTimeTransactionCount,
+                limitTimeTransactionCount = limitTimeTransactionCount
             )
 
             val syncManager = SyncManager(

@@ -24,12 +24,20 @@ interface ITransactionListener {
     fun onUpdateTransactionSyncState(syncState: SolanaKit.SyncState)
 }
 
+/***
+ * @param limitFirstTimeTransactionCount - limit for the first sync when there are no transactions in the local storage
+ * @param limitTimeTransactionCount - limit for the next syncs when there are already transactions in the local storage
+ *
+ * -1 means no limit
+ */
 class TransactionSyncer(
     private val publicKey: PublicKey,
     private val rpcClient: Api,
     private val storage: TransactionStorage,
     private val transactionManager: TransactionManager,
-    private val pendingTransactionSyncer: PendingTransactionSyncer
+    private val pendingTransactionSyncer: PendingTransactionSyncer,
+    private val limitFirstTimeTransactionCount: Int,
+    private val limitTimeTransactionCount: Int
 ) {
     private val _syncState = MutableStateFlow<SolanaKit.SyncState>(
         SolanaKit.SyncState.NotSynced(SolanaKit.SyncError.NotStarted())
@@ -37,6 +45,9 @@ class TransactionSyncer(
     val syncState: StateFlow<SolanaKit.SyncState> = _syncState.asStateFlow()
 
     var listener: ITransactionListener? = null
+
+    private var cachedTokenAccounts: List<SplTokenAccountWithPublicKey>? = null
+    private var tokenAccountsCacheTime: Long = 0
 
     private fun updateSyncState(newState: SolanaKit.SyncState) {
         _syncState.value = newState
@@ -179,11 +190,31 @@ class TransactionSyncer(
 
         } while (signatureObjectsChunk.size == rpcSignaturesCount)
 
-        return signatureObjects
+        var takFirst = if (lastTransactionHash == null) limitFirstTimeTransactionCount else limitTimeTransactionCount
+        if (takFirst == -1) { // no limit
+            takFirst = signatureObjects.size
+        }
+        return signatureObjects.take(takFirst)
     }
 
     private suspend fun getTokenAccountsByOwner(): List<SplTokenAccountWithPublicKey> {
-        return rpcClient.getTokenAccountsByOwner(publicKey).getOrNull() ?: listOf()
+        val now = System.currentTimeMillis()
+        val cacheValidDuration = 5 * 60 * 1000 // 5 minutes
+
+        cachedTokenAccounts?.let {
+            if (now - tokenAccountsCacheTime < cacheValidDuration) {
+                println("Using cached token accounts for owner: $publicKey: ${it.size} accounts")
+                return it
+            }
+        }
+
+        val accounts = rpcClient.getTokenAccountsByOwner(publicKey).getOrNull() ?: listOf()
+        if(accounts.isNotEmpty()) {
+            cachedTokenAccounts = accounts
+            tokenAccountsCacheTime = now
+        }
+
+        return accounts
     }
 
     private suspend fun getTransactionInfo(signature: String): TransactionResult? =
@@ -240,7 +271,7 @@ class TransactionSyncer(
 
     companion object {
         val tokenProgramId = TokenProgram.PROGRAM_ID.toBase58()
-        const val rpcSignaturesCount = 2
+        const val rpcSignaturesCount = 1000
     }
 
 }

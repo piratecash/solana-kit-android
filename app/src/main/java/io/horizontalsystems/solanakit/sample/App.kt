@@ -23,7 +23,9 @@ class App : Application() {
             application = instance,
             addressString = address,
             rpcSource = Configuration.rpcSource,
-            walletId = Configuration.walletId
+            walletId = Configuration.walletId,
+            limitTimeTransactionCount = 2,
+            limitFirstTimeTransactionCount = 2
         )
 
         signer = Signer.getInstance(seed)
