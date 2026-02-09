@@ -171,13 +171,12 @@ class SolanaKit(
         return lines.joinToString { "\n" }
     }
 
-    fun statusInfo(): Map<String, Any> {
-        val statusInfo = LinkedHashMap<String, Any>()
-
-        statusInfo["Last Block Height"] = lastBlockHeight ?: 0L
-        statusInfo["Sync State"] = syncState
-
-        return statusInfo
+    fun statusInfo(): Map<String, Any> = buildMap {
+        put("RPC Source", apiSyncer.source)
+        put("Last Block Height", lastBlockHeight ?: 0L)
+        put("Balance Sync State", syncState)
+        put("Token Sync State", tokenBalanceSyncState)
+        put("Transaction Sync State", transactionsSyncState)
     }
 
     fun addTokenAccount(mintAddress: String, decimals: Int) {
@@ -252,8 +251,8 @@ class SolanaKit(
 
         override fun toString(): String = when (this) {
             is Syncing -> "Syncing ${progress?.let { "${it * 100}" } ?: ""}"
-            is NotSynced -> "NotSynced ${error.javaClass::class.simpleName} - message: ${error.message}"
-            else -> this.javaClass::class.simpleName ?: ""
+            is NotSynced -> "NotSynced ${error.javaClass.simpleName} - message: ${error.message}"
+            is Synced -> "Synced"
         }
 
         override fun equals(other: Any?): Boolean {
