@@ -1,21 +1,33 @@
 [versions]
+gson = "2.13.1"
 hdWalletKitAndroid = "a74b51f"
+lifecycleViewmodelKtx = "2.9.2"
 metaplexAndroid = "1.5.0"
-okhttp = "5.0.0-alpha.10"
-sol4k = "0.5.8"
-kotlinx-coroutines-android = "1.9.0"
-room = "2.6.1"
-okhttp-logging-interceptor = "4.12.0"
-jetbrainsKotlinJvm = "2.0.21"
-solanakt = "0f6072a"
+moshiKotlin = "1.15.2"
+okhttp = "5.1.0"
+retrofit = "3.0.0"
+sol4k = "0.5.16"
+kotlinx-coroutines-android = "1.10.2"
+room = "2.7.2"
+okhttp-logging-interceptor = "5.1.0"
+jetbrainsKotlinJvm = "2.2.0"
+solanakt = "45b2818"
 
 [libraries]
+converter-gson = { module = "com.squareup.retrofit2:converter-gson", version.ref = "retrofit" }
+adapter-rxjava2 = { module = "com.squareup.retrofit2:adapter-rxjava2", version.ref = "retrofit" }
+converter-scalars = { module = "com.squareup.retrofit2:converter-scalars", version.ref = "retrofit" }
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
 hd-wallet-kit-android = { module = "com.github.horizontalsystems:hd-wallet-kit-android", version.ref = "hdWalletKitAndroid" }
+lifecycle-livedata-ktx = { module = "androidx.lifecycle:lifecycle-livedata-ktx", version.ref = "lifecycleViewmodelKtx" }
+lifecycle-viewmodel-ktx = { module = "androidx.lifecycle:lifecycle-viewmodel-ktx", version.ref = "lifecycleViewmodelKtx" }
 metaplex-android = { module = "com.github.metaplex-foundation:metaplex-android", version.ref = "metaplexAndroid" }
+moshi-kotlin = { module = "com.squareup.moshi:moshi-kotlin", version.ref = "moshiKotlin" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 kotlinx-coroutines-rx2 = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-rx2", version.ref = "kotlinx-coroutines-android" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinx-coroutines-android" }
 
+retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
 room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }

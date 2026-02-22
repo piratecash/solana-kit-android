@@ -18,6 +18,7 @@ import io.horizontalsystems.solanakit.models.Address
 import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.RpcSource
+import io.horizontalsystems.solanakit.models.Transaction
 import io.horizontalsystems.solanakit.network.ConnectionManager
 import io.horizontalsystems.solanakit.noderpc.ApiSyncer
 import io.horizontalsystems.solanakit.transactions.PendingTransactionSyncer
@@ -27,14 +28,20 @@ import io.horizontalsystems.solanakit.transactions.TransactionSyncer
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.sol4k.Base58
+import org.sol4k.Connection
+import org.sol4k.RpcUrl
+import org.sol4k.VersionedTransaction
+import org.sol4k.api.Commitment
 import java.math.BigDecimal
+import java.time.Instant
+import java.util.Base64
 import java.util.Objects
 
 class SolanaKit(
@@ -84,6 +91,38 @@ class SolanaKit(
             tokenAccounts.filter { it.mintAccount.isNft }
         }
 
+    fun estimateFee(hexEncoded: ByteArray): BigDecimal {
+        val base64Encoded = Base64.getEncoder().encodeToString(hexEncoded)
+        val versionedTx = VersionedTransaction.from(base64Encoded)
+        return versionedTx.calculateFee(baseFeeLamports)
+    }
+
+    fun sendRawTransaction(hexEncoded: ByteArray, signer: Signer): FullTransaction {
+        val base64Encoded = Base64.getEncoder().encodeToString(hexEncoded)
+        val versionedTx = VersionedTransaction.from(base64Encoded)
+        val signature = Base58.encode(signer.account.sign(versionedTx.message.serialize()))
+        versionedTx.addSignature(signature)
+        val base64WithSignature = Base64.getEncoder().encodeToString(versionedTx.serialize())
+        val connection = Connection(RpcUrl.MAINNNET)
+        val blockHash = connection.getLatestBlockhashExtended(Commitment.FINALIZED)
+        val transactionHash = connection.sendTransaction(versionedTx)
+        val fullTransaction = FullTransaction(
+            transaction = Transaction(
+                hash = transactionHash,
+                timestamp = Instant.now().epochSecond,
+                fee = versionedTx.calculateFee(baseFeeLamports),
+                from = address.publicKey.toBase58(),
+                to = null,
+                amount = null,
+                pending = true,
+                lastValidBlockHeight = blockHash.lastValidBlockHeight,
+                base64Encoded = base64WithSignature
+            ),
+            listOf()
+        )
+        return fullTransaction
+    }
+
     fun tokenAccount(mintAddress: String): FullTokenAccount? =
         tokenAccountManager.fullTokenAccount(mintAddress)
 
@@ -132,13 +171,12 @@ class SolanaKit(
         return lines.joinToString { "\n" }
     }
 
-    fun statusInfo(): Map<String, Any> {
-        val statusInfo = LinkedHashMap<String, Any>()
-
-        statusInfo["Last Block Height"] = lastBlockHeight ?: 0L
-        statusInfo["Sync State"] = syncState
-
-        return statusInfo
+    fun statusInfo(): Map<String, Any> = buildMap {
+        put("RPC Source", apiSyncer.source)
+        put("Last Block Height", lastBlockHeight ?: 0L)
+        put("Balance Sync State", syncState)
+        put("Token Sync State", tokenBalanceSyncState)
+        put("Transaction Sync State", transactionsSyncState)
     }
 
     fun addTokenAccount(mintAddress: String, decimals: Int) {
@@ -213,8 +251,8 @@ class SolanaKit(
 
         override fun toString(): String = when (this) {
             is Syncing -> "Syncing ${progress?.let { "${it * 100}" } ?: ""}"
-            is NotSynced -> "NotSynced ${error.javaClass::class.simpleName} - message: ${error.message}"
-            else -> this.javaClass::class.simpleName ?: ""
+            is NotSynced -> "NotSynced ${error.javaClass.simpleName} - message: ${error.message}"
+            is Synced -> "Synced"
         }
 
         override fun equals(other: Any?): Boolean {
@@ -245,7 +283,7 @@ class SolanaKit(
     }
 
     companion object {
-
+        val baseFeeLamports = 5000
         val fee = BigDecimal(0.000155)
 
         // Solana network will not store a SOL account with less than ~0.001 SOL.
@@ -257,7 +295,9 @@ class SolanaKit(
             application: Application,
             addressString: String,
             rpcSource: RpcSource,
-            walletId: String
+            walletId: String,
+            limitFirstTimeTransactionCount: Int = -1,
+            limitTimeTransactionCount: Int = -1
         ): SolanaKit {
             val router = HttpNetworkingRouter(rpcSource.endpoint)
             val connectionManager = ConnectionManager(application)
@@ -297,7 +337,9 @@ class SolanaKit(
                 rpcClient = rpcApiClient,
                 storage = transactionStorage,
                 transactionManager = transactionManager,
-                pendingTransactionSyncer = pendingTransactionSyncer
+                pendingTransactionSyncer = pendingTransactionSyncer,
+                limitFirstTimeTransactionCount = limitFirstTimeTransactionCount,
+                limitTimeTransactionCount = limitTimeTransactionCount
             )
 
             val syncManager = SyncManager(

@@ -1,0 +1,11 @@
+package io.horizontalsystems.solanakit.transactions
+
+object WellKnownPrograms {
+    const val SYSTEM_PROGRAM = "11111111111111111111111111111111"
+    const val COMPUTE_BUDGET = "ComputeBudget111111111111111111111111111111"
+    const val STAKE_PROGRAM = "Stake11111111111111111111111111111111111111"
+    const val VOTE_PROGRAM = "Vote111111111111111111111111111111111111111"
+    const val TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    const val ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+    const val MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+}

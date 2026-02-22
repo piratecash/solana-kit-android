@@ -1,0 +1,3 @@
+package io.horizontalsystems.solanakit.transactions
+
+interface InstructionType
