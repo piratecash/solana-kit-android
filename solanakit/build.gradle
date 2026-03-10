@@ -67,9 +67,15 @@ afterEvaluate {
         publications {
             release(MavenPublication) {
                 from components.release
-                groupId = 'com.github.horizontalsystems'
+                groupId = 'com.github.piratecash'
                 artifactId = 'solana-kit-android'
-                version = '1.0.0'
+                version = providers.environmentVariable("SHORT_SHA").getOrElse("local")
+            }
+        }
+        repositories {
+            maven {
+                name = "local"
+                url = uri(layout.buildDirectory.dir("maven-repo"))
             }
         }
     }

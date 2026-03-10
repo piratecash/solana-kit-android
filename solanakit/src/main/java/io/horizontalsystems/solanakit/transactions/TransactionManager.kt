@@ -155,7 +155,7 @@ class TransactionManager(
             account = signerAccount,
             destination = toAddress.publicKey,
             amount = amount,
-            instructions = priorityFeeInstructions(),
+            instructions = if (signerAccount.supportsPriorityFees) priorityFeeInstructions() else emptyList(),
             recentBlockHash = blockHash.blockhash
         ).await()
 
@@ -210,7 +210,7 @@ class TransactionManager(
             amount = amount,
             account = signerAccount,
             allowUnfundedRecipient = true,
-            instructions = priorityFeeInstructions(),
+            instructions = if (signerAccount.supportsPriorityFees) priorityFeeInstructions() else emptyList(),
             recentBlockHash = blockHash.blockhash
         ).await()
 
