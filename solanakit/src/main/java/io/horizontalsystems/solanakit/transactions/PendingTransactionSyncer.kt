@@ -1,10 +1,9 @@
 package io.horizontalsystems.solanakit.transactions
 
 import com.solana.api.Api
-import com.solana.rxsolana.api.getBlockHeight
+import com.solana.api.getBlockHeight
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.Transaction
-import kotlinx.coroutines.rx2.await
 import kotlinx.coroutines.withTimeout
 import org.sol4k.RpcUrl
 import java.io.BufferedReader
@@ -25,7 +24,7 @@ class PendingTransactionSyncer(
 
         val pendingTransactions = storage.pendingTransactions()
         val currentBlockHeight = try {
-            rpcClient.getBlockHeight().await()
+            rpcClient.getBlockHeight().getOrThrow()
         } catch (error: Throwable) {
             return
         }
