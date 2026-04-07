@@ -3,6 +3,7 @@ package io.horizontalsystems.solanakit.core
 import android.util.Log
 import com.solana.api.Api
 import com.solana.core.PublicKey
+import org.sol4k.Base58
 import com.solana.models.buffer.AccountInfoData
 import getTokenAccountBalanceWithRepeat
 import io.horizontalsystems.solanakit.SolanaKit
@@ -191,7 +192,7 @@ class TokenAccountManager(
         return PublicKey.associatedTokenAddress(
             walletAddress = PublicKey(walletAddress),
             tokenMintAddress = PublicKey(tokenMintAddress)
-        ).address.toBase58()
+        ).address.pubkey.let { Base58.encode(it) }
     }
 
 }

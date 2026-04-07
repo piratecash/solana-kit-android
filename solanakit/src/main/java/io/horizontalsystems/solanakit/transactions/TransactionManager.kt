@@ -3,6 +3,7 @@ package io.horizontalsystems.solanakit.transactions
 import com.solana.actions.Action
 import com.solana.core.Account
 import com.solana.core.PublicKey
+import org.sol4k.Base58
 import com.solana.core.TransactionInstruction
 import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.core.TokenAccountManager
@@ -31,7 +32,7 @@ class TransactionManager(
     private val tokenAccountManager: TokenAccountManager
 ) {
 
-    private val addressString = address.publicKey.toBase58()
+    private val addressString = Base58.encode(address.publicKey.pubkey)
     private val _transactionsFlow = MutableStateFlow<List<FullTransaction>>(listOf())
     val transactionsFlow: StateFlow<List<FullTransaction>> = _transactionsFlow
 
@@ -165,7 +166,7 @@ class TransactionManager(
                 timestamp = Instant.now().epochSecond,
                 fee = SolanaKit.fee,
                 from = addressString,
-                to = toAddress.publicKey.toBase58(),
+                to = Base58.encode(toAddress.publicKey.pubkey),
                 amount = amount.toBigDecimal(),
                 pending = true,
                 blockHash = blockHash.blockhash,
@@ -193,7 +194,7 @@ class TransactionManager(
         amount: Long,
         signerAccount: Account
     ): FullTransaction {
-        val mintAddressString = mintAddress.publicKey.toBase58()
+        val mintAddressString = Base58.encode(mintAddress.publicKey.pubkey)
         val fullTokenAccount =
             tokenAccountManager.getFullTokenAccountByMintAddress(mintAddressString)
                 ?: throw Exception("TokenAccount not found for $mintAddressString")
@@ -219,7 +220,7 @@ class TransactionManager(
                 hash = transactionHash,
                 timestamp = Instant.now().epochSecond,
                 from = addressString,
-                to = toAddress.publicKey.toBase58(),
+                to = Base58.encode(toAddress.publicKey.pubkey),
                 fee = SolanaKit.fee,
                 pending = true,
                 blockHash = blockHash.blockhash,

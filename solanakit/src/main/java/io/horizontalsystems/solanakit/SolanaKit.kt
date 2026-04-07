@@ -65,7 +65,7 @@ class SolanaKit(
     private val _balanceFlow = MutableStateFlow(balance)
 
     val isMainnet: Boolean = rpcSource.endpoint.network == Network.mainnetBeta
-    val receiveAddress = address.publicKey.toBase58()
+    val receiveAddress = Base58.encode(address.publicKey.pubkey)
 
     val lastBlockHeight: Long?
         get() = apiSyncer.lastBlockHeight
@@ -112,7 +112,7 @@ class SolanaKit(
                 hash = transactionHash,
                 timestamp = Instant.now().epochSecond,
                 fee = versionedTx.calculateFee(baseFeeLamports),
-                from = address.publicKey.toBase58(),
+                from = Base58.encode(address.publicKey.pubkey),
                 to = null,
                 amount = null,
                 pending = true,

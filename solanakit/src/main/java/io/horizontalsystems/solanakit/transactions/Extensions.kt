@@ -7,6 +7,7 @@ import com.solana.api.Api
 import com.solana.api.MultipleAccountsRequest
 import com.solana.core.Account
 import com.solana.core.PublicKey
+import org.sol4k.Base58
 import com.solana.core.Transaction
 import com.solana.core.TransactionInstruction
 import com.solana.models.RpcSendTransactionConfig
@@ -99,7 +100,7 @@ suspend fun Api.getMultipleMintAccountsInfo(
 ): Result<List<MintTokenAccountValue>?> =
     router.makeRequestResultWithRepeat(
         request = MultipleAccountsRequest(
-            accounts = accounts.map { it.toBase58() },
+            accounts = accounts.map { Base58.encode(it.pubkey) },
             encoding = encoding,
             commitment = commitment,
             length = length,
@@ -122,7 +123,7 @@ suspend fun <A> Api.getMultipleAccountsInfo(
 ): Result<List<AccountInfoFixed<A>?>> =
     router.makeRequestResultWithRepeat(
         request = MultipleAccountsRequest(
-            accounts = accounts.map { it.toBase58() },
+            accounts = accounts.map { Base58.encode(it.pubkey) },
             encoding = encoding,
             commitment = commitment,
             length = length,
@@ -189,7 +190,7 @@ fun Action.sendSPLTokens(
     }.flatMap { spl ->
         val toPublicKey = spl.first
         val unregisteredAssociatedToken = spl.second
-        if (fromPublicKey.toBase58() == toPublicKey.toBase58()) {
+        if (Base58.encode(fromPublicKey.pubkey) == Base58.encode(toPublicKey.pubkey)) {
             return@flatMap ContResult.failure(ResultError("Same send and destination address."))
         }
         val transaction = Transaction()

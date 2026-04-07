@@ -5,6 +5,7 @@ import android.util.Log
 import com.solana.api.Api
 import com.solana.api.SignatureInformation
 import com.solana.core.PublicKey
+import org.sol4k.Base58
 import com.solana.programs.TokenProgram
 import getTokenAccountsByOwner
 import io.horizontalsystems.solanakit.SolanaKit
@@ -270,7 +271,7 @@ class TransactionSyncer(
     }
 
     companion object {
-        val tokenProgramId = TokenProgram.PROGRAM_ID.toBase58()
+        val tokenProgramId = Base58.encode(TokenProgram.PROGRAM_ID.pubkey)
         const val rpcSignaturesCount = 1000
     }
 
