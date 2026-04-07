@@ -154,6 +154,15 @@ class SolanaKit(
 
     fun stop() {
         syncManager.stop()
+        scope?.cancel()
+    }
+
+    fun pause() {
+        syncManager.pause()
+    }
+
+    fun resume() {
+        syncManager.resume()
     }
 
     fun refresh(): Boolean {
