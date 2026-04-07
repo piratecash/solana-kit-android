@@ -3,11 +3,11 @@
   <groupId>com.github.piratecash</groupId>
   <artifactId>solana-kit-android</artifactId>
   <versioning>
-    <latest>91d63f3</latest>
-    <release>91d63f3</release>
+    <latest>1b59a9c</latest>
+    <release>1b59a9c</release>
     <versions>
-      <version>91d63f3</version>
+      <version>1b59a9c</version>
     </versions>
-    <lastUpdated>20260407113234</lastUpdated>
+    <lastUpdated>20260407120150</lastUpdated>
   </versioning>
 </metadata>
