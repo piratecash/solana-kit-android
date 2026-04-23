@@ -20,6 +20,8 @@ import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.RpcSource
 import io.horizontalsystems.solanakit.models.Transaction
 import io.horizontalsystems.solanakit.network.ConnectionManager
+import io.horizontalsystems.solanakit.network.SolanaNetworkErrorListener
+import io.horizontalsystems.solanakit.network.toSolanaNetworkError
 import io.horizontalsystems.solanakit.noderpc.ApiSyncer
 import io.horizontalsystems.solanakit.transactions.PendingTransactionSyncer
 import io.horizontalsystems.solanakit.transactions.SolanaFmService
@@ -307,9 +309,14 @@ class SolanaKit(
             rpcSource: RpcSource,
             walletId: String,
             limitFirstTimeTransactionCount: Int = -1,
-            limitTimeTransactionCount: Int = -1
+            limitTimeTransactionCount: Int = -1,
+            networkErrorListener: SolanaNetworkErrorListener? = null
         ): SolanaKit {
-            val router = HttpNetworkingRouter(rpcSource.endpoint)
+            val router = HttpNetworkingRouter(rpcSource.endpoint) { requestError ->
+                networkErrorListener?.onNetworkError(
+                    requestError.toSolanaNetworkError(source = "solana-rpc")
+                )
+            }
             val connectionManager = ConnectionManager(application)
 
             val mainDatabase = SolanaDatabaseManager.getMainDatabase(application, walletId)
@@ -331,7 +338,7 @@ class SolanaKit(
                 rpcClient = rpcApiClient,
                 storage = transactionStorage,
                 mainStorage = mainStorage,
-                solanaFmService = SolanaFmService()
+                solanaFmService = SolanaFmService(networkErrorListener)
             )
             val transactionManager =
                 TransactionManager(
@@ -341,7 +348,13 @@ class SolanaKit(
                     tokenAccountManager = tokenAccountManager
                 )
             val pendingTransactionSyncer =
-                PendingTransactionSyncer(rpcApiClient, transactionStorage, transactionManager)
+                PendingTransactionSyncer(
+                    rpcApiClient,
+                    transactionStorage,
+                    transactionManager,
+                    rpcSource.endpoint.url,
+                    networkErrorListener
+                )
             val transactionSyncer = TransactionSyncer(
                 publicKey = address.publicKey,
                 rpcClient = rpcApiClient,
