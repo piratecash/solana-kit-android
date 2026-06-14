@@ -69,7 +69,11 @@ afterEvaluate {
                 from components.release
                 groupId = 'com.github.piratecash'
                 artifactId = 'solana-kit-android'
-                version = providers.environmentVariable("PUBLISH_VERSION").getOrElse("local")
+                version = providers.environmentVariable("JITPACK_VERSION")
+                    .orElse(providers.environmentVariable("VERSION"))
+                    .orElse(providers.environmentVariable("VERSION_NAME"))
+                    .orElse(providers.environmentVariable("PUBLISH_VERSION"))
+                    .getOrElse("local")
             }
         }
         repositories {
