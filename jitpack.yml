@@ -1,5 +1,8 @@
 jdk:
   - openjdk17
 
+before_install:
+  - touch local.properties
+
 install:
   - ./gradlew :solanakit:publishToMavenLocal
