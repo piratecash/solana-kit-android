@@ -11,7 +11,7 @@ interface TransactionsDao {
     @Query("SELECT * FROM `Transaction` WHERE hash = :transactionHash LIMIT 1")
     fun get(transactionHash: String) : Transaction?
 
-    @Query("SELECT * FROM `Transaction` WHERE NOT pending ORDER BY timestamp DESC LIMIT 1")
+    @Query("SELECT * FROM `Transaction` WHERE NOT pending AND NOT external ORDER BY timestamp DESC LIMIT 1")
     fun lastNonPendingTransaction() : Transaction?
 
     @Query("SELECT * FROM `Transaction` WHERE pending ORDER BY timestamp")
@@ -21,10 +21,19 @@ interface TransactionsDao {
     fun insertTransactions(transactions: List<Transaction>)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
+    fun insertTransaction(transaction: Transaction): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     fun insertTokenTransfers(tokenTransfers: List<TokenTransfer>)
 
     @Update
     fun updateTransactions(transactions: List<Transaction>)
+
+    @Query("DELETE FROM `Transaction` WHERE external AND hash = :transactionHash")
+    fun deleteExternalTransaction(transactionHash: String)
+
+    @Query("DELETE FROM `Transaction` WHERE external AND hash IN (:transactionHashes)")
+    fun deleteExternalTransactions(transactionHashes: List<String>)
 
     @RawQuery
     suspend fun getTransactions(query: SupportSQLiteQuery): List<FullTransactionWrapper>

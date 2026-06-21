@@ -24,6 +24,7 @@ class PendingTransactionSyncer(
 
     suspend fun sync() {
         val updatedTransactions = mutableListOf<Transaction>()
+        val externalTransactionsToDelete = mutableListOf<String>()
 
         val pendingTransactions = storage.pendingTransactions()
         val currentBlockHeight = try {
@@ -39,9 +40,13 @@ class PendingTransactionSyncer(
                 }
 
                 confirmedTransaction.onSuccess { transaction ->
-                    updatedTransactions.add(
-                        pendingTx.copy(pending = false, error = transaction.meta?.err?.toString())
-                    )
+                    if (pendingTx.external) {
+                        externalTransactionsToDelete.add(pendingTx.hash)
+                    } else {
+                        updatedTransactions.add(
+                            pendingTx.copy(pending = false, error = transaction.meta?.err?.toString())
+                        )
+                    }
                 }
 
             } catch (error: Throwable) {
@@ -51,6 +56,8 @@ class PendingTransactionSyncer(
                     updatedTransactions.add(
                         pendingTx.copy(retryCount = pendingTx.retryCount + 1)
                     )
+                } else if (pendingTx.external) {
+                    externalTransactionsToDelete.add(pendingTx.hash)
                 } else {
                     updatedTransactions.add(
                         pendingTx.copy(pending = false, error = "BlockHash expired")
@@ -61,8 +68,13 @@ class PendingTransactionSyncer(
             }
         }
 
+        storage.deleteExternalTransactions(externalTransactionsToDelete)
         storage.updateTransactions(updatedTransactions)
-        transactionManager.notifyTransactionsUpdate(storage.getFullTransactions(updatedTransactions.map { it.hash }))
+
+        val visibleTransactionHashes = updatedTransactions.filterNot { it.external }.map { it.hash }
+        if (visibleTransactionHashes.isNotEmpty()) {
+            transactionManager.notifyTransactionsUpdate(storage.getFullTransactions(visibleTransactionHashes))
+        }
     }
 
     private fun sendTransaction(encodedTransaction: String) {

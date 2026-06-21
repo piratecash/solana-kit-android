@@ -17,7 +17,10 @@ import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.Address
 import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.FullTransaction
+import io.horizontalsystems.solanakit.models.RawTransactionBroadcastResult
+import io.horizontalsystems.solanakit.models.RawTransactionRetryMetadata
 import io.horizontalsystems.solanakit.models.RpcSource
+import io.horizontalsystems.solanakit.models.SignedRawSolanaTransaction
 import io.horizontalsystems.solanakit.models.Transaction
 import io.horizontalsystems.solanakit.network.ConnectionManager
 import io.horizontalsystems.solanakit.network.SolanaNetworkErrorListener
@@ -39,7 +42,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.sol4k.Base58
 import org.sol4k.Connection
-import org.sol4k.RpcUrl
 import org.sol4k.VersionedTransaction
 import org.sol4k.api.Commitment
 import java.math.BigDecimal
@@ -53,7 +55,7 @@ class SolanaKit(
     private val tokenAccountManager: TokenAccountManager,
     private val transactionManager: TransactionManager,
     private val syncManager: SyncManager,
-    rpcSource: RpcSource,
+    private val rpcSource: RpcSource,
     private val address: Address,
 ) : ISyncListener {
 
@@ -106,7 +108,7 @@ class SolanaKit(
         val signature = Base58.encode(signer.account.sign(versionedTx.message.serialize()))
         versionedTx.addSignature(signature)
         val base64WithSignature = Base64.getEncoder().encodeToString(versionedTx.serialize())
-        val connection = Connection(RpcUrl.MAINNNET)
+        val connection = Connection(rpcSource.url.toString())
         val blockHash = connection.getLatestBlockhashExtended(Commitment.FINALIZED)
         val transactionHash = connection.sendTransaction(versionedTx)
         val fullTransaction = FullTransaction(
@@ -118,6 +120,7 @@ class SolanaKit(
                 to = null,
                 amount = null,
                 pending = true,
+                blockHash = blockHash.blockhash,
                 lastValidBlockHeight = blockHash.lastValidBlockHeight,
                 base64Encoded = base64WithSignature
             ),
@@ -239,6 +242,27 @@ class SolanaKit(
     ): List<FullTransaction> =
         transactionManager.getSplTransaction(mintAddress, incoming, fromHash, limit)
 
+    suspend fun signedSolTransaction(
+        toAddress: Address,
+        amount: Long,
+        signer: Signer
+    ): SignedRawSolanaTransaction =
+        transactionManager.signedSolTransaction(toAddress, amount, signer.account)
+
+    suspend fun signedSplTransaction(
+        mintAddress: Address,
+        toAddress: Address,
+        amount: Long,
+        signer: Signer
+    ): SignedRawSolanaTransaction =
+        transactionManager.signedSplTransaction(mintAddress, toAddress, amount, signer.account)
+
+    suspend fun broadcastRawTransaction(
+        rawTransaction: ByteArray,
+        retryMetadata: RawTransactionRetryMetadata? = null
+    ): RawTransactionBroadcastResult =
+        transactionManager.broadcastRawTransaction(rawTransaction, retryMetadata)
+
     suspend fun sendSol(toAddress: Address, amount: Long, signer: Signer): FullTransaction =
         transactionManager.sendSol(toAddress, amount, signer.account)
 
@@ -345,7 +369,8 @@ class SolanaKit(
                     address = address,
                     storage = transactionStorage,
                     rpcAction = rpcAction,
-                    tokenAccountManager = tokenAccountManager
+                    tokenAccountManager = tokenAccountManager,
+                    rpcUrl = rpcSource.url.toString()
                 )
             val pendingTransactionSyncer =
                 PendingTransactionSyncer(
