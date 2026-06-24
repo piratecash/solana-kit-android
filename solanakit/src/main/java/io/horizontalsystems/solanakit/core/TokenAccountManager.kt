@@ -1,11 +1,11 @@
 package io.horizontalsystems.solanakit.core
 
-import android.util.Log
 import com.solana.api.Api
 import com.solana.core.PublicKey
 import org.sol4k.Base58
 import com.solana.models.buffer.AccountInfoData
 import getTokenAccountBalanceWithRepeat
+import getParsedTokenAccountsByOwner
 import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.database.main.MainStorage
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
@@ -13,7 +13,6 @@ import io.horizontalsystems.solanakit.models.AccountInfoFixed
 import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.MintAccount
 import io.horizontalsystems.solanakit.models.TokenAccount
-import io.horizontalsystems.solanakit.transactions.SolanaFmService
 import io.horizontalsystems.solanakit.transactions.getMultipleAccountsFixed
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,8 +30,7 @@ class TokenAccountManager(
     private val walletAddress: String,
     private val rpcClient: Api,
     private val storage: TransactionStorage,
-    private val mainStorage: MainStorage,
-    private val solanaFmService: SolanaFmService
+    private val mainStorage: MainStorage
 ) {
 
     var syncState: SolanaKit.SyncState =
@@ -69,8 +67,10 @@ class TokenAccountManager(
 
     @Throws(Exception::class)
     private suspend fun fetchTokenAccounts(walletAddress: String) {
-        val tokenAccounts = solanaFmService.tokenAccounts(walletAddress)
-        val mintAccounts = tokenAccounts.map { MintAccount(it.mintAddress, it.decimals) }
+        val parsedAccounts = rpcClient.getParsedTokenAccountsByOwner(PublicKey.valueOf(walletAddress))
+            .getOrThrow()
+        val tokenAccounts = parsedAccounts.map { it.toTokenAccount() }
+        val mintAccounts = parsedAccounts.map { it.toMintAccount() }
 
         storage.saveTokenAccounts(tokenAccounts)
         storage.saveMintAccounts(mintAccounts)
@@ -83,15 +83,17 @@ class TokenAccountManager(
         if (initialSync) {
             try {
                 fetchTokenAccounts(walletAddress)
-            } catch (e: Throwable) {
+            } catch (_: Throwable) {
                 initialSync = false
-                Log.e("TokenAccountManager", "fetchTokenAccounts error: ", e)
             }
         }
 
         val tokenAccounts = tokenAccounts ?: storage.getTokenAccounts()
         if (tokenAccounts.isEmpty()) {
             syncState = SolanaKit.SyncState.Synced()
+            if (initialSync) {
+                mainStorage.saveInitialSync()
+            }
             return
         }
 

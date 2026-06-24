@@ -27,7 +27,6 @@ import io.horizontalsystems.solanakit.network.SolanaNetworkErrorListener
 import io.horizontalsystems.solanakit.network.toSolanaNetworkError
 import io.horizontalsystems.solanakit.noderpc.ApiSyncer
 import io.horizontalsystems.solanakit.transactions.PendingTransactionSyncer
-import io.horizontalsystems.solanakit.transactions.SolanaFmService
 import io.horizontalsystems.solanakit.transactions.TransactionManager
 import io.horizontalsystems.solanakit.transactions.TransactionSyncer
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -361,8 +360,7 @@ class SolanaKit(
                 walletAddress = addressString,
                 rpcClient = rpcApiClient,
                 storage = transactionStorage,
-                mainStorage = mainStorage,
-                solanaFmService = SolanaFmService(networkErrorListener)
+                mainStorage = mainStorage
             )
             val transactionManager =
                 TransactionManager(

@@ -3,7 +3,6 @@ package io.horizontalsystems.solanakit.transactions
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.annotations.SerializedName
-import io.horizontalsystems.solanakit.models.TokenAccount
 import io.horizontalsystems.solanakit.models.TokenInfo
 import io.horizontalsystems.solanakit.network.SolanaNetworkErrorListener
 import io.horizontalsystems.solanakit.network.toSolanaNetworkError
@@ -17,7 +16,6 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.converter.scalars.ScalarsConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Path
-import java.math.BigDecimal
 import java.net.URL
 import java.util.logging.Logger
 
@@ -53,16 +51,6 @@ class SolanaFmService(
         api = retrofit.create(SolanaFmApi::class.java)
     }
 
-    suspend fun tokenAccounts(address: String): List<TokenAccount> {
-        val response = request("GET", "addresses/$address/tokens?tokenType=Legacy") {
-            api.legacyTokenAccounts(address).await()
-        }
-
-        return response.tokens.values.map { token ->
-            TokenAccount(token.ata, token.mint, token.balance.movePointRight(token.tokenData.decimals), token.tokenData.decimals)
-        }
-    }
-
     suspend fun tokenInfo(mintAddress: String): TokenInfo {
         val response = request("GET", "tokens/$mintAddress") {
             api.tokenInfo(mintAddress).await()
@@ -93,11 +81,6 @@ class SolanaFmService(
     }
 
     private interface SolanaFmApi {
-        @GET("addresses/{address}/tokens?tokenType=Legacy")
-        fun legacyTokenAccounts(
-            @Path("address") address: String
-        ): Single<TokenAccountsResponse>
-
         @GET("tokens/{mintAddress}")
         fun tokenInfo(
             @Path("mintAddress") mintAddress: String
@@ -114,25 +97,6 @@ class SolanaFmService(
     data class TokenInfoDetails(
         val name: String,
         val symbol: String
-    )
-
-    data class TokenAccountsResponse(
-        val pubkey: String,
-        val tokens: Map<String, TokenResponse>,
-    )
-
-    data class TokenResponse(
-        val mint: String,
-        val ata: String,
-        val balance: BigDecimal,
-        val tokenData: TokenData
-    )
-
-    data class TokenData(
-        val tokenType: String,
-        val decimals: Int,
-        val mintAuthority: String,
-        val freezeAuthority: String,
     )
 
 }
