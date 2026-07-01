@@ -9,7 +9,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.github.piratecash</groupId>
   <artifactId>solana-kit-android</artifactId>
-  <version>1b59a9c</version>
+  <version>v1.0.0-pcash.8</version>
   <packaging>aar</packaging>
   <dependencies>
     <dependency>
@@ -51,7 +51,7 @@
     <dependency>
       <groupId>com.github.piratecash</groupId>
       <artifactId>SolanaKT</artifactId>
-      <version>b35be52</version>
+      <version>5d5a0cb</version>
       <scope>runtime</scope>
     </dependency>
     <dependency>

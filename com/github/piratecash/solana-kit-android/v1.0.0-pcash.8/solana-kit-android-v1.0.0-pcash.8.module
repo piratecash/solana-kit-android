@@ -3,7 +3,7 @@
   "component": {
     "group": "com.github.piratecash",
     "module": "solana-kit-android",
-    "version": "1b59a9c",
+    "version": "v1.0.0-pcash.8",
     "attributes": {
       "org.gradle.status": "release"
     }
@@ -33,13 +33,13 @@
       ],
       "files": [
         {
-          "name": "solana-kit-android-1b59a9c.aar",
-          "url": "solana-kit-android-1b59a9c.aar",
-          "size": 409523,
-          "sha512": "35c79524175f8e8e1bdb3ee69edd94cc07a167d42902aa375c00c306c63b8e75fa1dcaa73318a4f7dc48f210e7c24c38244509f7d2770ea69ceb1140038199bc",
-          "sha256": "12bfdff1e95dfd1ee470ab9c39d11589393641c1881c3edc0857e214f532a608",
-          "sha1": "a724d8f088a78b96af90fa6d475c5209292a38b2",
-          "md5": "ef7916a9323a2ef1e0448236ec005ba7"
+          "name": "solana-kit-android-v1.0.0-pcash.8.aar",
+          "url": "solana-kit-android-v1.0.0-pcash.8.aar",
+          "size": 489640,
+          "sha512": "f82bb36f0a32e0438b7178cab0da9119aab277f07cb84ed6ddbb9851064659864a1905754c555070f01c51587e41158c2bee40fd663b934158c4f0be49b8603d",
+          "sha256": "f36eddef65a91d5211687c337121a818c704b684c15aca67232d55cf0d834756",
+          "sha1": "b65b818f827c659d2d6e5565e9df83f55b78a608",
+          "md5": "12c2cfd171a1707a5b619b55d927a1e0"
         }
       ]
     },
@@ -91,7 +91,7 @@
           "group": "com.github.piratecash",
           "module": "SolanaKT",
           "version": {
-            "requires": "b35be52"
+            "requires": "5d5a0cb"
           }
         },
         {
@@ -198,13 +198,13 @@
       ],
       "files": [
         {
-          "name": "solana-kit-android-1b59a9c.aar",
-          "url": "solana-kit-android-1b59a9c.aar",
-          "size": 409523,
-          "sha512": "35c79524175f8e8e1bdb3ee69edd94cc07a167d42902aa375c00c306c63b8e75fa1dcaa73318a4f7dc48f210e7c24c38244509f7d2770ea69ceb1140038199bc",
-          "sha256": "12bfdff1e95dfd1ee470ab9c39d11589393641c1881c3edc0857e214f532a608",
-          "sha1": "a724d8f088a78b96af90fa6d475c5209292a38b2",
-          "md5": "ef7916a9323a2ef1e0448236ec005ba7"
+          "name": "solana-kit-android-v1.0.0-pcash.8.aar",
+          "url": "solana-kit-android-v1.0.0-pcash.8.aar",
+          "size": 489640,
+          "sha512": "f82bb36f0a32e0438b7178cab0da9119aab277f07cb84ed6ddbb9851064659864a1905754c555070f01c51587e41158c2bee40fd663b934158c4f0be49b8603d",
+          "sha256": "f36eddef65a91d5211687c337121a818c704b684c15aca67232d55cf0d834756",
+          "sha1": "b65b818f827c659d2d6e5565e9df83f55b78a608",
+          "md5": "12c2cfd171a1707a5b619b55d927a1e0"
         }
       ]
     },
@@ -221,13 +221,13 @@
       },
       "files": [
         {
-          "name": "solana-kit-android-1b59a9c-sources.jar",
-          "url": "solana-kit-android-1b59a9c-sources.jar",
-          "size": 110208,
-          "sha512": "b32b6dfc3862183def65206a58a76c11281eabf2e636c53c0667795f623019da7378fa7dfd89a7d983a1cac3470f09ca5906556dccd4b75ad25bbcb842940187",
-          "sha256": "31b9268d8b151d6608d6afe51fed704a1da765af404d073d8996dac25fcc8f83",
-          "sha1": "ff8941cd560382c4907cae82c0f3aa999781e97d",
-          "md5": "c6ffec9fc01f52207c9c2cdc90c457bd"
+          "name": "solana-kit-android-v1.0.0-pcash.8-sources.jar",
+          "url": "solana-kit-android-v1.0.0-pcash.8-sources.jar",
+          "size": 125527,
+          "sha512": "f4ddc2e483eee9d38d25bdea51aed84cf10465dd34bd44917de68fa76aab5f66bfc110b4904ca91e4bc4af6685623a46269852421ccca7ddb8ed7d4a0bee9e40",
+          "sha256": "619b0c665eb18bd639ff038f05289f1bbe4f9e4c751eab075f9e115ba5289f5d",
+          "sha1": "8e43340f2b0ec51adb8b04d2f52efa0b7820c94a",
+          "md5": "1a37565486b6b6bf95511f7367579617"
         }
       ]
     }
