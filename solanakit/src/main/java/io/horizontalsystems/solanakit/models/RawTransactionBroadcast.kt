@@ -19,6 +19,10 @@ data class RawTransactionBroadcastResult(
 enum class RawTransactionBroadcastStatus {
     Submitted,
     Queued,
+    // The node reports the signature as already processed, meaning a previous
+    // broadcast attempt already reached the network. Distinguished from
+    // Submitted so callers don't mistake it for a fresh, successful send.
+    AlreadyKnown,
 }
 
 data class RawTransactionRetryMetadata(

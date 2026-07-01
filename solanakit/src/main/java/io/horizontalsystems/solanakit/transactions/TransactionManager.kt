@@ -318,7 +318,7 @@ class TransactionManager(
         } catch (error: Throwable) {
             if (error.isKnownSubmittedTransactionError()) {
                 storage.deleteExternalTransaction(signature)
-                RawTransactionBroadcastResult(signature, RawTransactionBroadcastStatus.Submitted)
+                RawTransactionBroadcastResult(signature, RawTransactionBroadcastStatus.AlreadyKnown)
             } else if (error.isExpiredBlockhashError()) {
                 throw error
             } else if (retryMetadata == null) {
