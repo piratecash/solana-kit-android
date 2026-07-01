@@ -1,0 +1,235 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.github.piratecash",
+    "module": "solana-kit-android",
+    "version": "65ca936",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.11.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.0"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "solana-kit-android-65ca936.aar",
+          "url": "solana-kit-android-65ca936.aar",
+          "size": 489640,
+          "sha512": "f82bb36f0a32e0438b7178cab0da9119aab277f07cb84ed6ddbb9851064659864a1905754c555070f01c51587e41158c2bee40fd663b934158c4f0be49b8603d",
+          "sha256": "f36eddef65a91d5211687c337121a818c704b684c15aca67232d55cf0d834756",
+          "sha1": "b65b818f827c659d2d6e5565e9df83f55b78a608",
+          "md5": "12c2cfd171a1707a5b619b55d927a1e0"
+        }
+      ]
+    },
+    {
+      "name": "releaseRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.core",
+          "module": "core-ktx",
+          "version": {
+            "requires": "1.10.1"
+          }
+        },
+        {
+          "group": "androidx.appcompat",
+          "module": "appcompat",
+          "version": {
+            "requires": "1.6.1"
+          }
+        },
+        {
+          "group": "com.google.android.material",
+          "module": "material",
+          "version": {
+            "requires": "1.9.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlinx",
+          "module": "kotlinx-coroutines-android",
+          "version": {
+            "requires": "1.10.2"
+          }
+        },
+        {
+          "group": "org.sol4k",
+          "module": "sol4k",
+          "version": {
+            "requires": "0.5.16"
+          }
+        },
+        {
+          "group": "com.github.piratecash",
+          "module": "SolanaKT",
+          "version": {
+            "requires": "5d5a0cb"
+          }
+        },
+        {
+          "group": "com.github.metaplex-foundation",
+          "module": "metaplex-android",
+          "version": {
+            "requires": "1.5.0"
+          },
+          "excludes": [
+            {
+              "group": "com.github.metaplex-foundation",
+              "module": "SolanaKT"
+            },
+            {
+              "group": "com.github.metaplex-foundation.kborsh",
+              "module": "kborsh-jvm"
+            }
+          ]
+        },
+        {
+          "group": "com.squareup.moshi",
+          "module": "moshi-kotlin",
+          "version": {
+            "requires": "1.15.2"
+          }
+        },
+        {
+          "group": "com.squareup.okhttp3",
+          "module": "okhttp",
+          "version": {
+            "requires": "5.1.0"
+          }
+        },
+        {
+          "group": "com.squareup.okhttp3",
+          "module": "logging-interceptor",
+          "version": {
+            "requires": "5.1.0"
+          }
+        },
+        {
+          "group": "com.squareup.retrofit2",
+          "module": "retrofit",
+          "version": {
+            "requires": "3.0.0"
+          }
+        },
+        {
+          "group": "com.squareup.retrofit2",
+          "module": "adapter-rxjava2",
+          "version": {
+            "requires": "3.0.0"
+          }
+        },
+        {
+          "group": "com.squareup.retrofit2",
+          "module": "converter-gson",
+          "version": {
+            "requires": "3.0.0"
+          }
+        },
+        {
+          "group": "com.squareup.retrofit2",
+          "module": "converter-scalars",
+          "version": {
+            "requires": "3.0.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlinx",
+          "module": "kotlinx-coroutines-rx2",
+          "version": {
+            "requires": "1.10.2"
+          }
+        },
+        {
+          "group": "com.google.code.gson",
+          "module": "gson",
+          "version": {
+            "requires": "2.13.1"
+          }
+        },
+        {
+          "group": "androidx.room",
+          "module": "room-runtime",
+          "version": {
+            "requires": "2.7.2"
+          }
+        },
+        {
+          "group": "androidx.room",
+          "module": "room-ktx",
+          "version": {
+            "requires": "2.7.2"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.0"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "solana-kit-android-65ca936.aar",
+          "url": "solana-kit-android-65ca936.aar",
+          "size": 489640,
+          "sha512": "f82bb36f0a32e0438b7178cab0da9119aab277f07cb84ed6ddbb9851064659864a1905754c555070f01c51587e41158c2bee40fd663b934158c4f0be49b8603d",
+          "sha256": "f36eddef65a91d5211687c337121a818c704b684c15aca67232d55cf0d834756",
+          "sha1": "b65b818f827c659d2d6e5565e9df83f55b78a608",
+          "md5": "12c2cfd171a1707a5b619b55d927a1e0"
+        }
+      ]
+    },
+    {
+      "name": "releaseSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "files": [
+        {
+          "name": "solana-kit-android-65ca936-sources.jar",
+          "url": "solana-kit-android-65ca936-sources.jar",
+          "size": 125527,
+          "sha512": "f4ddc2e483eee9d38d25bdea51aed84cf10465dd34bd44917de68fa76aab5f66bfc110b4904ca91e4bc4af6685623a46269852421ccca7ddb8ed7d4a0bee9e40",
+          "sha256": "619b0c665eb18bd639ff038f05289f1bbe4f9e4c751eab075f9e115ba5289f5d",
+          "sha1": "8e43340f2b0ec51adb8b04d2f52efa0b7820c94a",
+          "md5": "1a37565486b6b6bf95511f7367579617"
+        }
+      ]
+    }
+  ]
+}
