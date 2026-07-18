@@ -5,17 +5,14 @@ import android.util.Log
 import com.solana.api.Api
 import com.solana.api.SignatureInformation
 import com.solana.core.PublicKey
+import org.sol4k.Base58
 import com.solana.programs.TokenProgram
 import getTokenAccountsByOwner
 import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
-import io.horizontalsystems.solanakit.models.FullTokenTransfer
 import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.MintAccount
-import io.horizontalsystems.solanakit.models.TokenTransfer
-import io.horizontalsystems.solanakit.models.Transaction
 import io.horizontalsystems.solanakit.noderpc.endpoints.getSignaturesForAddress
-import java.math.BigDecimal
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -101,76 +98,14 @@ class TransactionSyncer(
         }
     }
 
-    private fun toBigNumWithMovePointLeft(value: Long?, shiftAmount: Int = 9) =
-        value?.toBigDecimal()
-            ?.movePointLeft(shiftAmount)?.stripTrailingZeros()
-
     private fun merge(
         rpcTransactions: List<TransactionResult>,
         mintAccounts: Map<String, MintAccount>
-    ): List<FullTransaction> {
-        val transactions = mutableMapOf<String, FullTransaction>()
-
-        for (signatureInfo in rpcTransactions) {
-            signatureInfo.blockTime.let { blockTime ->
-                val postTokenBalances = signatureInfo.meta?.postTokenBalances?.firstOrNull()
-                val preTokenBalances = signatureInfo.meta?.preTokenBalances?.firstOrNull()
-                val amount = if (postTokenBalances != null && preTokenBalances != null) {
-                    null //need to set amount NULL if TOKEN transfer
-                } else {
-                    BigDecimal(
-                        (signatureInfo.meta?.preBalances?.getOrNull(0) ?: 0L) -
-                                (signatureInfo.meta?.postBalances?.getOrNull(0) ?: 0L)
-                    )
-                }
-                val transferInstruction = signatureInfo.transaction?.message?.instructions?.find {
-                    SolanaInstructionParser.parseInstruction(it, signatureInfo.transaction.message.accountKeys) == SystemProgramInstruction.TRANSFER
-                }
-
-                val from = transferInstruction?.accounts?.getOrNull(0)
-                    ?.toInt()
-                    ?.let { idx -> signatureInfo.transaction.message.accountKeys.getOrNull(idx) }
-
-                val to = transferInstruction?.accounts?.getOrNull(1)
-                    ?.toInt()
-                    ?.let { idx -> signatureInfo.transaction.message.accountKeys.getOrNull(idx) }
-
-                val transaction = Transaction(
-                    hash = signatureInfo.transaction?.signatures?.firstOrNull().orEmpty(),
-                    timestamp = blockTime,
-                    fee = toBigNumWithMovePointLeft(signatureInfo.meta?.fee),
-                    from = from ?: signatureInfo.transaction?.message?.accountKeys?.firstOrNull().orEmpty(),
-                    to = to ?: signatureInfo.transaction?.message?.accountKeys?.getOrNull(1).orEmpty(),
-                    error = signatureInfo.meta?.err?.toString(),
-                    amount = amount,
-                    pending = false
-                )
-                var tokenTransfers: List<FullTokenTransfer> = emptyList()
-                if (postTokenBalances != null && preTokenBalances != null) {
-                    val amount = (preTokenBalances.uiTokenAmount.amount?.toBigDecimal()
-                        ?: BigDecimal.ZERO) - (postTokenBalances.uiTokenAmount.amount?.toBigDecimal()
-                        ?: BigDecimal.ZERO)
-                    mintAccounts[postTokenBalances.mint]?.let { mintAccount ->
-                        tokenTransfers = listOf(
-                            FullTokenTransfer(
-                                tokenTransfer = TokenTransfer(
-                                    transactionHash = signatureInfo.transaction?.signatures?.firstOrNull()
-                                        .orEmpty(),
-                                    mintAddress = postTokenBalances.mint,
-                                    incoming = amount > BigDecimal.ZERO,
-                                    amount = amount.abs()
-                                ),
-                                mintAccount = mintAccount
-                            )
-                        )
-                    }
-                }
-                transactions[signatureInfo.transaction?.signatures?.firstOrNull().orEmpty()] =
-                    FullTransaction(transaction = transaction, tokenTransfers = tokenTransfers)
-            }
-        }
-        return transactions.values.toList()
-    }
+    ): List<FullTransaction> = SolanaTransactionMapper.map(
+        userAddress = publicKey.toBase58(),
+        rpcTransactions = rpcTransactions,
+        mintAccounts = mintAccounts,
+    )
 
     private suspend fun getSignaturesFromRpcNode(
         pKey: PublicKey,
@@ -270,7 +205,7 @@ class TransactionSyncer(
     }
 
     companion object {
-        val tokenProgramId = TokenProgram.PROGRAM_ID.toBase58()
+        val tokenProgramId = Base58.encode(TokenProgram.PROGRAM_ID.pubkey)
         const val rpcSignaturesCount = 1000
     }
 

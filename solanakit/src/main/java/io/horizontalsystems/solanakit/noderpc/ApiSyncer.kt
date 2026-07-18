@@ -1,7 +1,7 @@
 package io.horizontalsystems.solanakit.noderpc
 
 import com.solana.api.Api
-import com.solana.rxsolana.api.getBlockHeight
+import com.solana.api.getBlockHeight
 import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.database.main.MainStorage
 import io.horizontalsystems.solanakit.network.ConnectionManager
@@ -12,8 +12,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.rx2.await
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.DurationUnit
 import kotlin.time.toDuration
 
@@ -36,6 +36,7 @@ class ApiSyncer(
 
     private var scope: CoroutineScope? = null
     private var isStarted = false
+    private var isPaused = false
     private var timerJob: Job? = null
 
     init {
@@ -70,6 +71,7 @@ class ApiSyncer(
 
     fun stop() {
         isStarted = false
+        isPaused = false
 
         connectionManager.stop()
         state = SyncerState.NotReady(SolanaKit.SyncError.NotStarted())
@@ -77,10 +79,25 @@ class ApiSyncer(
         stopTimer()
     }
 
+    fun pause() {
+        isPaused = true
+        stopTimer()
+    }
+
+    fun resume() {
+        isPaused = false
+
+        if (isStarted && connectionManager.isConnected) {
+            startTimer()
+        }
+    }
+
     private suspend fun sync() = withContext(Dispatchers.IO) {
         try {
-            val blockHeight = api.getBlockHeight().await()
+            val blockHeight = api.getBlockHeight().getOrThrow()
             handleBlockHeight(blockHeight)
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Throwable) {
             state = SyncerState.NotReady(error)
         }
@@ -101,7 +118,9 @@ class ApiSyncer(
         connectionManager.recheckConnection()
         if (connectionManager.isConnected) {
             state = SyncerState.Ready
-            startTimer()
+            if (!isPaused) {
+                startTimer()
+            }
         } else {
             state = SyncerState.NotReady(SolanaKit.SyncError.NoNetworkConnection())
             stopTimer()
@@ -109,6 +128,7 @@ class ApiSyncer(
     }
 
     private fun startTimer() {
+        timerJob?.cancel()
         timerJob = scope?.launch {
             flow {
                 while (isActive) {

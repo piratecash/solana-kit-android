@@ -5,6 +5,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import io.horizontalsystems.solanakit.database.transaction.dao.MintAccountDao
 import io.horizontalsystems.solanakit.database.transaction.dao.TokenAccountDao
 import io.horizontalsystems.solanakit.database.transaction.dao.TransactionSyncerStateDao
@@ -19,7 +21,7 @@ import io.horizontalsystems.solanakit.models.*
         Transaction::class,
         TokenAccount::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 @TypeConverters(RoomTypeConverters::class)
@@ -32,11 +34,18 @@ abstract class TransactionDatabase : RoomDatabase() {
 
     companion object {
 
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `Transaction` ADD COLUMN `external` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getInstance(context: Context, databaseName: String): TransactionDatabase {
             return Room.databaseBuilder(context, TransactionDatabase::class.java, databaseName)
 //                .setQueryCallback({ sqlQuery, bindArgs ->
 //                    println("SQL Query: $sqlQuery SQL Args: $bindArgs")
 //                }, Executors.newSingleThreadExecutor())
+                .addMigrations(MIGRATION_10_11)
                 .fallbackToDestructiveMigration()
                 .allowMainThreadQueries()
                 .build()

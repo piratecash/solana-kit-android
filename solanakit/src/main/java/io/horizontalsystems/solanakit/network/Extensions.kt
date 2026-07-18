@@ -23,7 +23,7 @@ suspend inline fun <reified R> JsonRpcDriver.makeRequestResultWithRepeat(
 
                 response.error?.let { errorResponse ->
                     errorResponse.retryAfter?.let { retryAfter ->
-                        timeout = (retryAfter+1)*1000
+                        timeout = (retryAfter + 1) * 1000
                     }
                     val rpcException = parseRpcError(errorResponse.message)
                     check(rpcException?.error?.code != 429) {

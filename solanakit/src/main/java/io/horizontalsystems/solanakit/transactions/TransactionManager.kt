@@ -1,17 +1,25 @@
 package io.horizontalsystems.solanakit.transactions
 
 import com.solana.actions.Action
+import com.solana.api.sendRawTransaction
 import com.solana.core.Account
 import com.solana.core.PublicKey
+import org.sol4k.Base58
 import com.solana.core.TransactionInstruction
 import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.core.TokenAccountManager
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.Address
+import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.FullTokenTransfer
 import io.horizontalsystems.solanakit.models.FullTransaction
+import io.horizontalsystems.solanakit.models.RawTransactionBroadcastResult
+import io.horizontalsystems.solanakit.models.RawTransactionBroadcastStatus
+import io.horizontalsystems.solanakit.models.RawTransactionRetryMetadata
+import io.horizontalsystems.solanakit.models.SignedRawSolanaTransaction
 import io.horizontalsystems.solanakit.models.TokenTransfer
 import io.horizontalsystems.solanakit.models.Transaction
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,27 +27,32 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.rx2.await
 import org.sol4k.Connection
-import org.sol4k.RpcUrl
 import org.sol4k.api.Commitment
 import java.math.BigDecimal
 import java.time.Instant
+import java.util.Base64
+import java.util.logging.Logger
 
 class TransactionManager(
     address: Address,
     private val storage: TransactionStorage,
     private val rpcAction: Action,
-    private val tokenAccountManager: TokenAccountManager
+    private val tokenAccountManager: TokenAccountManager,
+    rpcUrl: String,
 ) {
 
-    private val addressString = address.publicKey.toBase58()
+    private val addressString = Base58.encode(address.publicKey.pubkey)
+    private val connection = Connection(rpcUrl)
+    private val logger = Logger.getLogger("TransactionManager")
     private val _transactionsFlow = MutableStateFlow<List<FullTransaction>>(listOf())
     val transactionsFlow: StateFlow<List<FullTransaction>> = _transactionsFlow
 
     fun allTransactionsFlow(incoming: Boolean?): Flow<List<FullTransaction>> =
         _transactionsFlow.map { txList ->
-            val incoming = incoming ?: return@map txList
+            val visibleTxList = txList.visibleTransactions()
+            val incoming = incoming ?: return@map visibleTxList
 
-            txList.filter { fullTransaction ->
+            visibleTxList.filter { fullTransaction ->
                 hasSolTransfer(
                     fullTransaction,
                     incoming
@@ -49,12 +62,12 @@ class TransactionManager(
 
     fun solTransactionsFlow(incoming: Boolean?): Flow<List<FullTransaction>> =
         _transactionsFlow.map { txList ->
-            txList.filter { hasSolTransfer(it, incoming) }
+            txList.visibleTransactions().filter { hasSolTransfer(it, incoming) }
         }.filter { it.isNotEmpty() }
 
     fun splTransactionsFlow(mintAddress: String, incoming: Boolean?): Flow<List<FullTransaction>> =
         _transactionsFlow.map { txList ->
-            txList.filter { fullTransaction ->
+            txList.visibleTransactions().filter { fullTransaction ->
                 hasSplTransfer(mintAddress, fullTransaction.tokenTransfers, incoming)
             }
         }.filter { it.isNotEmpty() }
@@ -120,12 +133,15 @@ class TransactionManager(
             }
 
             storage.addTransactions(transactions)
-            _transactionsFlow.tryEmit(transactions)
+            notifyTransactionsUpdate(transactions)
         }
     }
 
     fun notifyTransactionsUpdate(transactions: List<FullTransaction>) {
-        _transactionsFlow.tryEmit(transactions)
+        val visibleTransactions = transactions.visibleTransactions()
+        if (visibleTransactions.isNotEmpty()) {
+            _transactionsFlow.tryEmit(visibleTransactions)
+        }
     }
 
     private fun hasSolTransfer(fullTransaction: FullTransaction, incoming: Boolean?): Boolean {
@@ -148,16 +164,22 @@ class TransactionManager(
             fullTokenTransfer.tokenTransfer.incoming == incoming
         }
 
-    suspend fun sendSol(toAddress: Address, amount: Long, signerAccount: Account): FullTransaction {
-        val connection = Connection(RpcUrl.MAINNNET)
+    suspend fun signedSolTransaction(toAddress: Address, amount: Long, signerAccount: Account): SignedRawSolanaTransaction {
         val blockHash = connection.getLatestBlockhashExtended(Commitment.FINALIZED)
-        val (transactionHash, base64Encoded) = rpcAction.sendSOL(
+        val signedTransaction = rpcAction.signSOL(
             account = signerAccount,
             destination = toAddress.publicKey,
             amount = amount,
-            instructions = priorityFeeInstructions(),
+            instructions = if (signerAccount.supportsPriorityFees) priorityFeeInstructions() else emptyList(),
             recentBlockHash = blockHash.blockhash
         ).await()
+
+        return signedTransaction.toRawSolanaTransaction(blockHash.blockhash, blockHash.lastValidBlockHeight)
+    }
+
+    suspend fun sendSol(toAddress: Address, amount: Long, signerAccount: Account): FullTransaction {
+        val signedTransaction = signedSolTransaction(toAddress, amount, signerAccount)
+        val transactionHash = sendSignedRawTransaction(signedTransaction)
 
         val fullTransaction = FullTransaction(
             Transaction(
@@ -165,18 +187,18 @@ class TransactionManager(
                 timestamp = Instant.now().epochSecond,
                 fee = SolanaKit.fee,
                 from = addressString,
-                to = toAddress.publicKey.toBase58(),
+                to = Base58.encode(toAddress.publicKey.pubkey),
                 amount = amount.toBigDecimal(),
                 pending = true,
-                blockHash = blockHash.blockhash,
-                lastValidBlockHeight = blockHash.lastValidBlockHeight,
-                base64Encoded = base64Encoded
+                blockHash = signedTransaction.blockHash,
+                lastValidBlockHeight = signedTransaction.lastValidBlockHeight,
+                base64Encoded = signedTransaction.base64Encoded
             ),
             listOf()
         )
 
         storage.addTransactions(listOf(fullTransaction))
-        _transactionsFlow.tryEmit(listOf(fullTransaction))
+        notifyTransactionsUpdate(listOf(fullTransaction))
 
         return fullTransaction
     }
@@ -187,44 +209,51 @@ class TransactionManager(
         return listOf(computeUnitLimit, computeUnitPrice)
     }
 
+    suspend fun signedSplTransaction(
+        mintAddress: Address,
+        toAddress: Address,
+        amount: Long,
+        signerAccount: Account
+    ): SignedRawSolanaTransaction {
+        val mintAddressString = Base58.encode(mintAddress.publicKey.pubkey)
+        return signedSplTransaction(
+            mintAddress = mintAddress,
+            toAddress = toAddress,
+            amount = amount,
+            signerAccount = signerAccount,
+            fullTokenAccount = fullTokenAccount(mintAddressString),
+        )
+    }
+
     suspend fun sendSpl(
         mintAddress: Address,
         toAddress: Address,
         amount: Long,
         signerAccount: Account
     ): FullTransaction {
-        val mintAddressString = mintAddress.publicKey.toBase58()
-        val fullTokenAccount =
-            tokenAccountManager.getFullTokenAccountByMintAddress(mintAddressString)
-                ?: throw Exception("TokenAccount not found for $mintAddressString")
-        val tokenAccount = fullTokenAccount.tokenAccount
+        val mintAddressString = Base58.encode(mintAddress.publicKey.pubkey)
+        val fullTokenAccount = fullTokenAccount(mintAddressString)
         val mintAccount = fullTokenAccount.mintAccount
-
-        val connection = Connection(RpcUrl.MAINNNET)
-        val blockHash = connection.getLatestBlockhashExtended(Commitment.FINALIZED)
-
-        val (transactionHash, base64Trx) = rpcAction.sendSPLTokens(
-            mintAddress = mintAddress.publicKey,
-            fromPublicKey = PublicKey(tokenAccount.address),
-            destinationAddress = toAddress.publicKey,
+        val signedTransaction = signedSplTransaction(
+            mintAddress = mintAddress,
+            toAddress = toAddress,
             amount = amount,
-            account = signerAccount,
-            allowUnfundedRecipient = true,
-            instructions = priorityFeeInstructions(),
-            recentBlockHash = blockHash.blockhash
-        ).await()
+            signerAccount = signerAccount,
+            fullTokenAccount = fullTokenAccount,
+        )
+        val transactionHash = sendSignedRawTransaction(signedTransaction)
 
         val fullTransaction = FullTransaction(
             Transaction(
                 hash = transactionHash,
                 timestamp = Instant.now().epochSecond,
                 from = addressString,
-                to = toAddress.publicKey.toBase58(),
+                to = Base58.encode(toAddress.publicKey.pubkey),
                 fee = SolanaKit.fee,
                 pending = true,
-                blockHash = blockHash.blockhash,
-                lastValidBlockHeight = blockHash.lastValidBlockHeight,
-                base64Encoded = base64Trx
+                blockHash = signedTransaction.blockHash,
+                lastValidBlockHeight = signedTransaction.lastValidBlockHeight,
+                base64Encoded = signedTransaction.base64Encoded
             ),
             listOf(
                 FullTokenTransfer(
@@ -240,9 +269,125 @@ class TransactionManager(
         )
 
         storage.addTransactions(listOf(fullTransaction))
-        _transactionsFlow.tryEmit(listOf(fullTransaction))
+        notifyTransactionsUpdate(listOf(fullTransaction))
 
         return fullTransaction
     }
 
+    private suspend fun signedSplTransaction(
+        mintAddress: Address,
+        toAddress: Address,
+        amount: Long,
+        signerAccount: Account,
+        fullTokenAccount: FullTokenAccount,
+    ): SignedRawSolanaTransaction {
+        val tokenAccount = fullTokenAccount.tokenAccount
+        val blockHash = connection.getLatestBlockhashExtended(Commitment.FINALIZED)
+
+        val signedTransaction = rpcAction.signSPLTokens(
+            mintAddress = mintAddress.publicKey,
+            fromPublicKey = PublicKey(tokenAccount.address),
+            destinationAddress = toAddress.publicKey,
+            amount = amount,
+            account = signerAccount,
+            allowUnfundedRecipient = true,
+            instructions = if (signerAccount.supportsPriorityFees) priorityFeeInstructions() else emptyList(),
+            recentBlockHash = blockHash.blockhash
+        ).await()
+
+        return signedTransaction.toRawSolanaTransaction(blockHash.blockhash, blockHash.lastValidBlockHeight)
+    }
+
+    private fun fullTokenAccount(mintAddressString: String): FullTokenAccount =
+        tokenAccountManager.getFullTokenAccountByMintAddress(mintAddressString)
+            ?: throw Exception("TokenAccount not found for $mintAddressString")
+
+    suspend fun broadcastRawTransaction(
+        rawTransaction: ByteArray,
+        retryMetadata: RawTransactionRetryMetadata?
+    ): RawTransactionBroadcastResult {
+        val signature = rawTransactionSignature(rawTransaction)
+
+        return try {
+            val rpcSignature = rpcAction.api.sendRawTransactionWithoutRetries(rawTransaction).getOrThrow()
+            logSignatureMismatch(rpcSignature, signature)
+            storage.deleteExternalTransaction(signature)
+            RawTransactionBroadcastResult(signature, RawTransactionBroadcastStatus.Submitted)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            if (error.isKnownSubmittedTransactionError()) {
+                storage.deleteExternalTransaction(signature)
+                RawTransactionBroadcastResult(signature, RawTransactionBroadcastStatus.AlreadyKnown)
+            } else if (error.isExpiredBlockhashError()) {
+                throw error
+            } else if (retryMetadata == null) {
+                throw error
+            } else {
+                storage.saveExternalTransaction(
+                    Transaction(
+                        hash = signature,
+                        timestamp = Instant.now().epochSecond,
+                        fee = null,
+                        pending = true,
+                        blockHash = retryMetadata.blockHash,
+                        lastValidBlockHeight = retryMetadata.lastValidBlockHeight,
+                        base64Encoded = Base64.getEncoder().encodeToString(rawTransaction),
+                        external = true,
+                    )
+                )
+                RawTransactionBroadcastResult(signature, RawTransactionBroadcastStatus.Queued)
+            }
+        }
+    }
+
+    private suspend fun sendSignedRawTransaction(signedTransaction: SignedRawSolanaTransaction): String {
+        val transactionHash = rpcAction.api.sendRawTransaction(signedTransaction.raw).getOrThrow()
+        logSignatureMismatch(transactionHash, signedTransaction.signature)
+        return signedTransaction.signature
+    }
+
+    private fun logSignatureMismatch(actual: String, expected: String) {
+        if (actual != expected) {
+            logger.warning("RPC returned transaction signature $actual but expected $expected")
+        }
+    }
+
+    private fun SignedSolanaTransactionData.toRawSolanaTransaction(
+        blockHash: String,
+        lastValidBlockHeight: Long,
+    ) = SignedRawSolanaTransaction(
+        raw = raw,
+        base64Encoded = base64Encoded,
+        signature = signature,
+        fee = SolanaKit.fee,
+        blockHash = blockHash,
+        lastValidBlockHeight = lastValidBlockHeight,
+    )
+
+    private fun Throwable.isKnownSubmittedTransactionError(): Boolean {
+        val message = message?.lowercase() ?: return false
+        return knownSubmittedTransactionMessages.any { message.contains(it) }
+    }
+
+    private fun Throwable.isExpiredBlockhashError(): Boolean {
+        val message = message?.lowercase() ?: return false
+        return expiredBlockhashMessages.any { message.contains(it) }
+    }
+
+    private fun List<FullTransaction>.visibleTransactions(): List<FullTransaction> =
+        filterNot { it.transaction.external }
+
+    companion object {
+        private val knownSubmittedTransactionMessages = listOf(
+            "already processed",
+            "already been processed",
+            "duplicate signature",
+        )
+        private val expiredBlockhashMessages = listOf(
+            "blockhash not found",
+            "block height exceeded",
+            "transaction has expired",
+        )
+    }
 }

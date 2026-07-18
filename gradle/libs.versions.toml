@@ -1,6 +1,6 @@
 [versions]
 gson = "2.13.1"
-hdWalletKitAndroid = "a74b51f"
+hdWalletKitAndroid = "8f873a1"
 lifecycleViewmodelKtx = "2.9.2"
 metaplexAndroid = "1.5.0"
 moshiKotlin = "1.15.2"
@@ -11,14 +11,14 @@ kotlinx-coroutines-android = "1.10.2"
 room = "2.7.2"
 okhttp-logging-interceptor = "5.1.0"
 jetbrainsKotlinJvm = "2.2.0"
-solanakt = "45b2818"
+solanakt = "864ec19"
 
 [libraries]
 converter-gson = { module = "com.squareup.retrofit2:converter-gson", version.ref = "retrofit" }
 adapter-rxjava2 = { module = "com.squareup.retrofit2:adapter-rxjava2", version.ref = "retrofit" }
 converter-scalars = { module = "com.squareup.retrofit2:converter-scalars", version.ref = "retrofit" }
 gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
-hd-wallet-kit-android = { module = "com.github.horizontalsystems:hd-wallet-kit-android", version.ref = "hdWalletKitAndroid" }
+hd-wallet-kit-android = { module = "com.github.piratecash:hd-wallet-kit-android", version.ref = "hdWalletKitAndroid" }
 lifecycle-livedata-ktx = { module = "androidx.lifecycle:lifecycle-livedata-ktx", version.ref = "lifecycleViewmodelKtx" }
 lifecycle-viewmodel-ktx = { module = "androidx.lifecycle:lifecycle-viewmodel-ktx", version.ref = "lifecycleViewmodelKtx" }
 metaplex-android = { module = "com.github.metaplex-foundation:metaplex-android", version.ref = "metaplexAndroid" }

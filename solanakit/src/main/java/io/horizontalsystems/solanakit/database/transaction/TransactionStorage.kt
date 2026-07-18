@@ -41,6 +41,27 @@ class TransactionStorage(
         mintAccountDao.insert(fullTokenTransfers.map { it.mintAccount }.toSet().toList())
     }
 
+    fun saveExternalTransaction(transaction: Transaction) {
+        val existing = transactionsDao.get(transaction.hash)
+        if (existing?.external == false) return
+
+        val transactionToSave = if (existing == null) transaction else transaction.copy(retryCount = existing.retryCount)
+        if (existing == null) {
+            transactionsDao.insertTransaction(transactionToSave)
+        } else {
+            transactionsDao.updateTransactions(listOf(transactionToSave))
+        }
+    }
+
+    fun deleteExternalTransaction(transactionHash: String) =
+        transactionsDao.deleteExternalTransaction(transactionHash)
+
+    fun deleteExternalTransactions(transactionHashes: List<String>) {
+        if (transactionHashes.isNotEmpty()) {
+            transactionsDao.deleteExternalTransactions(transactionHashes)
+        }
+    }
+
     suspend fun getTransactions(
         incoming: Boolean?,
         fromHash: String?,
@@ -87,7 +108,7 @@ class TransactionStorage(
         fromHash: String?,
         limit: Int?
     ): List<FullTransaction> {
-        val whereConditions = mutableListOf<String>()
+        val whereConditions = mutableListOf("NOT tx.external")
         typeCondition?.let { whereConditions.add(it) }
 
         fromHash?.let { transactionsDao.get(it) }?.let { fromTransaction ->
@@ -104,10 +125,9 @@ class TransactionStorage(
             whereConditions.add(fromCondition)
         }
 
-        val whereClause =
-            if (whereConditions.isNotEmpty()) "WHERE ${whereConditions.joinToString(" AND ")}" else ""
+        val whereClause = "WHERE ${whereConditions.joinToString(" AND ")}"
         val orderClause = "ORDER BY tx.timestamp DESC, HEX(tx.hash) DESC"
-        val limitClause = limit?.let { "LIMIT $limit" } ?: ""
+        val limitClause = limit?.let { "LIMIT $it" } ?: ""
 
         val sqlQuery = """
                       SELECT tx.*
@@ -126,11 +146,14 @@ class TransactionStorage(
         mintAccountDao.get(address)
 
     suspend fun getFullTransactions(hashes: List<String>): List<FullTransaction> {
+        if (hashes.isEmpty()) return emptyList()
+
         val sqlQuery = """
                       SELECT tx.*
                       FROM `Transaction` AS tx
                       LEFT JOIN TokenTransfer AS tt ON tx.hash = tt.transactionHash
                       WHERE tx.hash IN (${hashes.joinToString(", ", "'", "'")})
+                      AND NOT tx.external
                       """
 
         return transactionsDao.getTransactions(SimpleSQLiteQuery(sqlQuery))
