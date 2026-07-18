@@ -24,6 +24,7 @@ import io.horizontalsystems.solanakit.models.SignedRawSolanaTransaction
 import io.horizontalsystems.solanakit.models.Transaction
 import io.horizontalsystems.solanakit.network.ConnectionManager
 import io.horizontalsystems.solanakit.network.SolanaNetworkErrorListener
+import io.horizontalsystems.solanakit.network.emitSafely
 import io.horizontalsystems.solanakit.network.toSolanaNetworkError
 import io.horizontalsystems.solanakit.noderpc.ApiSyncer
 import io.horizontalsystems.solanakit.transactions.PendingTransactionSyncer
@@ -336,9 +337,9 @@ class SolanaKit(
             networkErrorListener: SolanaNetworkErrorListener? = null
         ): SolanaKit {
             val router = HttpNetworkingRouter(rpcSource.endpoint) { requestError ->
-                networkErrorListener?.onNetworkError(
+                networkErrorListener.emitSafely {
                     requestError.toSolanaNetworkError(source = "solana-rpc")
-                )
+                }
             }
             val connectionManager = ConnectionManager(application)
 

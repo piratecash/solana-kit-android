@@ -8,6 +8,19 @@ fun interface SolanaNetworkErrorListener {
     fun onNetworkError(error: SolanaNetworkError)
 }
 
+/**
+ * Safe, lazy emission: the [buildError] lambda (which may resolve DNS) runs only
+ * when a listener is installed, and any Throwable from the listener is swallowed
+ * so diagnostics can never break the observed network error path.
+ */
+internal inline fun SolanaNetworkErrorListener?.emitSafely(buildError: () -> SolanaNetworkError) {
+    val listener = this ?: return
+    try {
+        listener.onNetworkError(buildError())
+    } catch (_: Throwable) {
+    }
+}
+
 data class SolanaNetworkError(
     val source: String,
     val method: String,

@@ -5,6 +5,7 @@ import com.solana.api.getBlockHeight
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.Transaction
 import io.horizontalsystems.solanakit.network.SolanaNetworkErrorListener
+import io.horizontalsystems.solanakit.network.emitSafely
 import io.horizontalsystems.solanakit.network.toSolanaNetworkError
 import kotlinx.coroutines.withTimeout
 import java.io.BufferedReader
@@ -109,13 +110,13 @@ class PendingTransactionSyncer(
             }
             connection.disconnect()
         } catch (e: Throwable) {
-            networkErrorListener?.onNetworkError(
+            networkErrorListener.emitSafely {
                 rpcUrl.toSolanaNetworkError(
                     source = "solana-rpc-pending",
                     method = "sendTransaction",
                     throwable = e
                 )
-            )
+            }
         }
     }
 

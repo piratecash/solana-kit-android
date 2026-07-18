@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder
 import com.google.gson.annotations.SerializedName
 import io.horizontalsystems.solanakit.models.TokenInfo
 import io.horizontalsystems.solanakit.network.SolanaNetworkErrorListener
+import io.horizontalsystems.solanakit.network.emitSafely
 import io.horizontalsystems.solanakit.network.toSolanaNetworkError
 import io.reactivex.Single
 import kotlinx.coroutines.rx2.await
@@ -70,13 +71,13 @@ class SolanaFmService(
     ): T = try {
         block()
     } catch (error: Throwable) {
-        networkErrorListener?.onNetworkError(
+        networkErrorListener.emitSafely {
             URL(baseUrl, path).toSolanaNetworkError(
                 source = "solana-fm",
                 method = method,
                 throwable = error
             )
-        )
+        }
         throw error
     }
 
