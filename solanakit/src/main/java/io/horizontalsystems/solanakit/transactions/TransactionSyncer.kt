@@ -57,11 +57,11 @@ class TransactionSyncer(
 
         updateSyncState(SolanaKit.SyncState.Syncing())
 
-        pendingTransactionSyncer.sync()
-
-        val lastTransactionHash = storage.lastNonPendingTransaction()?.hash
-
         try {
+            pendingTransactionSyncer.sync()
+
+            val lastTransactionHash = storage.lastNonPendingTransaction()?.hash
+
             val rpcTransactions = getSignaturesFromRpcNode(
                 pKey = publicKey,
                 lastTransactionHash = lastTransactionHash

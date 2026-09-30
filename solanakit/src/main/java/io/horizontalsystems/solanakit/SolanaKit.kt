@@ -361,19 +361,33 @@ class SolanaKit(
                     requestError.toSolanaNetworkError(source = "solana-rpc")
                 }
             }
-            val connectionManager = ConnectionManager(context)
-
             val mainDatabase = SolanaDatabaseManager.getMainDatabase(context, walletId, databaseKey)
             val mainStorage = MainStorage(mainDatabase)
+            val lastBlockHeight = mainStorage.getLastBlockHeight()
+            val balance = mainStorage.getBalance()
+
+            val transactionDatabase =
+                SolanaDatabaseManager.getTransactionDatabase(context, walletId, databaseKey)
+            val transactionStorage = TransactionStorage(transactionDatabase, addressString)
 
             val rpcApiClient = Api(router)
             val rpcAction = Action(rpcApiClient, listOf())
+            val tokenAccountManager = TokenAccountManager(
+                walletAddress = addressString,
+                rpcClient = rpcApiClient,
+                storage = transactionStorage,
+                mainStorage = mainStorage
+            )
+            tokenAccountManager.reloadFullTokenAccounts()
+
+            // Registers a system network callback: nothing below may suspend, or a cancel would leak it.
+            val connectionManager = ConnectionManager(context)
             val apiSyncer = ApiSyncer(
                 rpcApiClient,
                 rpcSource.syncInterval,
                 connectionManager,
                 mainStorage,
-                mainStorage.getLastBlockHeight()
+                lastBlockHeight
             )
             val address = Address(addressString)
 
@@ -381,17 +395,7 @@ class SolanaKit(
                 address.publicKey,
                 rpcApiClient,
                 mainStorage,
-                mainStorage.getBalance()
-            )
-
-            val transactionDatabase =
-                SolanaDatabaseManager.getTransactionDatabase(context, walletId, databaseKey)
-            val transactionStorage = TransactionStorage(transactionDatabase, addressString)
-            val tokenAccountManager = TokenAccountManager(
-                walletAddress = addressString,
-                rpcClient = rpcApiClient,
-                storage = transactionStorage,
-                mainStorage = mainStorage
+                balance
             )
             val transactionManager =
                 TransactionManager(
@@ -437,8 +441,6 @@ class SolanaKit(
                 address
             )
             syncManager.listener = kit
-
-            tokenAccountManager.reloadFullTokenAccounts()
 
             return kit
         }
