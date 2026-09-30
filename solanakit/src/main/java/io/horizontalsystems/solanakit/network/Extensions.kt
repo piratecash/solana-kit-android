@@ -40,7 +40,6 @@ suspend inline fun <reified R> JsonRpcDriver.makeRequestResultWithRepeat(
                 return Result.success(null)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
             val tooManyRequests = e.message?.contains("429") == true
             if (tooManyRequests) {
                 networkLogger.d {
@@ -50,7 +49,7 @@ suspend inline fun <reified R> JsonRpcDriver.makeRequestResultWithRepeat(
                 delay(timeout)
                 timeout *= 1.5.toLong()
             } else {
-                networkLogger.d {
+                networkLogger.w(e) {
                     "makeRequestResultWithRepeat exception in ${request.method} with params ${request.params}"
                 }
             }

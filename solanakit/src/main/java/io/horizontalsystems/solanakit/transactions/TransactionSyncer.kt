@@ -94,7 +94,7 @@ class TransactionSyncer(
             transactionManager.handle(transactions)
             updateSyncState(SolanaKit.SyncState.Synced())
         } catch (exception: Throwable) {
-            exception.printStackTrace()
+            logger.w(exception) { "Transaction sync failed" }
             updateSyncState(SolanaKit.SyncState.NotSynced(exception))
         }
     }
@@ -139,7 +139,7 @@ class TransactionSyncer(
 
         cachedTokenAccounts?.let {
             if (now - tokenAccountsCacheTime < cacheValidDuration) {
-                println("Using cached token accounts for owner: $publicKey: ${it.size} accounts")
+                logger.d { "Using cached token accounts: ${it.size}" }
                 return it
             }
         }
@@ -200,7 +200,7 @@ class TransactionSyncer(
                 )
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logger.w(e) { "Failed to fetch mint accounts" }
         }
         return mintAccounts
     }
