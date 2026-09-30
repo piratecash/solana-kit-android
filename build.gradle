@@ -1,12 +1,15 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
 buildscript {
-    ext.kotlin_version = '2.0.20'
-    ext.room_version = '2.6.1'
+    ext.kotlin_version = '2.3.20'
+    ext.room_version = '2.8.4'
     repositories {
         google()
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.9.1'
+        classpath 'com.android.tools.build:gradle:8.12.1'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
         classpath "org.jetbrains.kotlin:kotlin-serialization:$kotlin_version"
         // NOTE: Do not place your application dependencies here; they belong
@@ -15,20 +18,39 @@ buildscript {
 }
 
 plugins {
-    id 'com.google.devtools.ksp' version '2.2.0-2.0.2' apply false
+    id 'com.google.devtools.ksp' version '2.3.2' apply false
     alias(libs.plugins.jetbrains.kotlin.jvm) apply false
+    alias(libs.plugins.androidx.room) apply false
+}
+
+// Jitpack sets these as env vars; local/CI publish runs may pass them as -P properties instead.
+def resolvePublicationProperty = { name ->
+    providers.environmentVariable(name).orElse(providers.gradleProperty(name))
+}
+
+ext.publicationVersion = resolvePublicationProperty('JITPACK_VERSION')
+    .orElse(resolvePublicationProperty('VERSION'))
+    .orElse(resolvePublicationProperty('VERSION_NAME'))
+    .orElse(provider { '0.0.0-SNAPSHOT' })
+    .get()
+
+subprojects {
+    tasks.withType(KotlinCompile).configureEach {
+        compilerOptions {
+            jvmDefault.set(JvmDefaultMode.DISABLE)
+        }
+    }
+
+    if (name == 'solanakit') {
+        group = 'com.github.piratecash.solana-kit-android'
+        version = rootProject.ext.publicationVersion
+    }
 }
 
 allprojects {
     repositories {
         google()
         mavenCentral()
-        maven {
-            url = uri("https://piratecash.github.io/SolanaKT")
-            content {
-                includeGroup("com.github.piratecash")
-            }
-        }
         maven { url "https://jitpack.io" }
     }
 }

@@ -31,7 +31,8 @@ class ApiSyncer(
     private val api: Api,
     private val syncInterval: Long,
     private val connectionManager: ConnectionManager,
-    private val storage: MainStorage
+    private val storage: MainStorage,
+    initialLastBlockHeight: Long?
 ) {
 
     private var scope: CoroutineScope? = null
@@ -58,7 +59,7 @@ class ApiSyncer(
     var listener: IApiSyncerListener? = null
     val source = "API ${api.router.endpoint.url.host}"
 
-    var lastBlockHeight: Long? = storage.getLastBlockHeight()
+    var lastBlockHeight: Long? = initialLastBlockHeight
         private set
 
     fun start(scope: CoroutineScope) {
@@ -103,10 +104,11 @@ class ApiSyncer(
         }
     }
 
-    private fun handleBlockHeight(blockHeight: Long) {
+    private suspend fun handleBlockHeight(blockHeight: Long) {
         if (this.lastBlockHeight != blockHeight) {
-            this.lastBlockHeight = blockHeight
+            // persist before publishing: a cancelled save must not leave memory ahead of the database
             storage.saveLastBlockHeight(blockHeight)
+            this.lastBlockHeight = blockHeight
         }
 
         listener?.didUpdateLastBlockHeight(blockHeight)

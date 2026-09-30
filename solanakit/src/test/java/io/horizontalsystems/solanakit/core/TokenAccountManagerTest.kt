@@ -6,11 +6,10 @@ import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.database.main.MainStorage
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.mockk.coEvery
-import io.mockk.every
+import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
-import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertTrue
@@ -35,8 +34,8 @@ class TokenAccountManagerTest {
 
     @Test
     fun sync_initialDiscoveryReturnsEmpty_savesInitialSync() = runBlocking {
-        every { mainStorage.isInitialSync() } returns true
-        every { storage.getTokenAccounts() } returns emptyList()
+        coEvery { mainStorage.isInitialSync() } returns true
+        coEvery { storage.getTokenAccounts() } returns emptyList()
         coEvery { rpcClient.getParsedTokenAccountsByOwner(any()) } returns Result.success(emptyList())
 
         val manager = TokenAccountManager(
@@ -48,7 +47,7 @@ class TokenAccountManagerTest {
 
         manager.sync()
 
-        verify(exactly = 1) { mainStorage.saveInitialSync() }
+        coVerify(exactly = 1) { mainStorage.saveInitialSync() }
         assertTrue(manager.syncState is SolanaKit.SyncState.Synced)
     }
 }

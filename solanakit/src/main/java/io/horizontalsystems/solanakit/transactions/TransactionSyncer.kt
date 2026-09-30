@@ -1,7 +1,7 @@
 package io.horizontalsystems.solanakit.transactions
 
 import SplTokenAccountWithPublicKey
-import android.util.Log
+import co.touchlab.kermit.Logger
 import com.solana.api.Api
 import com.solana.api.SignatureInformation
 import com.solana.core.PublicKey
@@ -43,6 +43,7 @@ class TransactionSyncer(
 
     var listener: ITransactionListener? = null
 
+    private val logger = Logger.withTag("SolanaKit")
     private var cachedTokenAccounts: List<SplTokenAccountWithPublicKey>? = null
     private var tokenAccountsCacheTime: Long = 0
 
@@ -64,7 +65,7 @@ class TransactionSyncer(
             val rpcTransactions = getSignaturesFromRpcNode(
                 pKey = publicKey,
                 lastTransactionHash = lastTransactionHash
-            ).apply { Log.d("TransactionSyncer", "rpcTransactions: ${this.size}") }
+            ).apply { logger.d { "rpcTransactions: ${this.size}" } }
                 .mapNotNull { it.signature }
                 .mapNotNull { signature ->
                     getTransactionInfo(signature)
@@ -76,7 +77,7 @@ class TransactionSyncer(
                     pKey = PublicKey.valueOf(it.publicKey),
                     lastTransactionHash = lastTransactionHash
                 )
-            }.flatten().apply { Log.d("TransactionSyncer", "token transactions: ${this.size}") }
+            }.flatten().apply { logger.d { "token transactions: ${this.size}" } }
                 .mapNotNull { it.signature }
                 .mapNotNull { signature ->
                     getTransactionInfo(signature)

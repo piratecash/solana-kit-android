@@ -298,7 +298,7 @@ class TransactionManager(
         return signedTransaction.toRawSolanaTransaction(blockHash.blockhash, blockHash.lastValidBlockHeight)
     }
 
-    private fun fullTokenAccount(mintAddressString: String): FullTokenAccount =
+    private suspend fun fullTokenAccount(mintAddressString: String): FullTokenAccount =
         tokenAccountManager.getFullTokenAccountByMintAddress(mintAddressString)
             ?: throw Exception("TokenAccount not found for $mintAddressString")
 

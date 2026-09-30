@@ -14,25 +14,25 @@ import io.horizontalsystems.solanakit.models.TokenAccount
 interface TokenAccountDao {
 
     @Query("SELECT * FROM TokenAccount WHERE mintAddress=:address LIMIT 1")
-    fun getByMintAddress(address: String): TokenAccount?
+    suspend fun getByMintAddress(address: String): TokenAccount?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    fun insert(tokenAccount: TokenAccount)
+    suspend fun insert(tokenAccount: TokenAccount)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    fun insert(balance: List<TokenAccount>)
+    suspend fun insert(balance: List<TokenAccount>)
 
     @Query("SELECT * FROM TokenAccount WHERE mintAddress=:mintAddress LIMIT 1")
-    fun get(mintAddress: String): TokenAccountWrapper?
+    suspend fun get(mintAddress: String): TokenAccountWrapper?
 
     @Query("SELECT * FROM TokenAccount WHERE mintAddress IN (:mintAddresses)")
-    fun get(mintAddresses: List<String>): List<TokenAccount>
+    suspend fun get(mintAddresses: List<String>): List<TokenAccount>
 
     @Query("SELECT * FROM TokenAccount")
-    fun getAll(): List<TokenAccount>
+    suspend fun getAll(): List<TokenAccount>
 
     @Query("SELECT * FROM TokenAccount")
-    fun getAllFullAccounts(): List<TokenAccountWrapper>
+    suspend fun getAllFullAccounts(): List<TokenAccountWrapper>
 
     data class TokenAccountWrapper(
         @Embedded

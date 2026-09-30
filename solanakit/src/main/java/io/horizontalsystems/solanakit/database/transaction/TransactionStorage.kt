@@ -1,6 +1,8 @@
 package io.horizontalsystems.solanakit.database.transaction
 
-import androidx.sqlite.db.SimpleSQLiteQuery
+import androidx.room.RoomRawQuery
+import androidx.room.immediateTransaction
+import androidx.room.useWriterConnection
 import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.LastSyncedTransaction
@@ -9,7 +11,7 @@ import io.horizontalsystems.solanakit.models.TokenAccount
 import io.horizontalsystems.solanakit.models.Transaction
 
 class TransactionStorage(
-    database: TransactionDatabase,
+    private val database: TransactionDatabase,
     private val address: String
 ) {
     private val syncerStateDao = database.transactionSyncerStateDao()
@@ -17,46 +19,55 @@ class TransactionStorage(
     private val mintAccountDao = database.mintAccountDao()
     private val tokenAccountDao = database.tokenAccountsDao()
 
-    fun getSyncedBlockTime(syncerId: String): LastSyncedTransaction? =
+    suspend fun getSyncedBlockTime(syncerId: String): LastSyncedTransaction? =
         syncerStateDao.get(syncerId)
 
-    fun setSyncedBlockTime(syncBlockTime: LastSyncedTransaction) {
+    suspend fun setSyncedBlockTime(syncBlockTime: LastSyncedTransaction) {
         syncerStateDao.save(syncBlockTime)
     }
 
-    fun lastNonPendingTransaction(): Transaction? =
+    suspend fun lastNonPendingTransaction(): Transaction? =
         transactionsDao.lastNonPendingTransaction()
 
-    fun pendingTransactions(): List<Transaction> =
+    suspend fun pendingTransactions(): List<Transaction> =
         transactionsDao.pendingTransactions()
 
-    fun updateTransactions(transactions: List<Transaction>) =
+    suspend fun updateTransactions(transactions: List<Transaction>) =
         transactionsDao.updateTransactions(transactions)
 
-    fun addTransactions(transactions: List<FullTransaction>) {
-        transactionsDao.insertTransactions(transactions.map { it.transaction })
+    suspend fun addTransactions(transactions: List<FullTransaction>) {
+        database.useWriterConnection { transactor ->
+            transactor.immediateTransaction {
+                transactionsDao.insertTransactions(transactions.map { it.transaction })
 
-        val fullTokenTransfers = transactions.map { it.tokenTransfers }.flatten()
-        transactionsDao.insertTokenTransfers(fullTokenTransfers.map { it.tokenTransfer })
-        mintAccountDao.insert(fullTokenTransfers.map { it.mintAccount }.toSet().toList())
-    }
-
-    fun saveExternalTransaction(transaction: Transaction) {
-        val existing = transactionsDao.get(transaction.hash)
-        if (existing?.external == false) return
-
-        val transactionToSave = if (existing == null) transaction else transaction.copy(retryCount = existing.retryCount)
-        if (existing == null) {
-            transactionsDao.insertTransaction(transactionToSave)
-        } else {
-            transactionsDao.updateTransactions(listOf(transactionToSave))
+                val fullTokenTransfers = transactions.map { it.tokenTransfers }.flatten()
+                transactionsDao.insertTokenTransfers(fullTokenTransfers.map { it.tokenTransfer })
+                mintAccountDao.insert(fullTokenTransfers.map { it.mintAccount }.toSet().toList())
+            }
         }
     }
 
-    fun deleteExternalTransaction(transactionHash: String) =
+    suspend fun saveExternalTransaction(transaction: Transaction) {
+        database.useWriterConnection { transactor ->
+            transactor.immediateTransaction<Unit> {
+                val existing = transactionsDao.get(transaction.hash)
+                if (existing?.external == false) return@immediateTransaction
+
+                if (existing == null) {
+                    transactionsDao.insertTransaction(transaction)
+                } else {
+                    transactionsDao.updateTransactions(
+                        listOf(transaction.copy(retryCount = existing.retryCount))
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun deleteExternalTransaction(transactionHash: String) =
         transactionsDao.deleteExternalTransaction(transactionHash)
 
-    fun deleteExternalTransactions(transactionHashes: List<String>) {
+    suspend fun deleteExternalTransactions(transactionHashes: List<String>) {
         if (transactionHashes.isNotEmpty()) {
             transactionsDao.deleteExternalTransactions(transactionHashes)
         }
@@ -138,7 +149,7 @@ class TransactionStorage(
                       $limitClause
                       """
 
-        return transactionsDao.getTransactions(SimpleSQLiteQuery(sqlQuery))
+        return transactionsDao.getTransactions(RoomRawQuery(sqlQuery))
             .map { it.fullTransaction }
     }
 
@@ -156,36 +167,46 @@ class TransactionStorage(
                       AND NOT tx.external
                       """
 
-        return transactionsDao.getTransactions(SimpleSQLiteQuery(sqlQuery))
+        return transactionsDao.getTransactions(RoomRawQuery(sqlQuery))
             .map { it.fullTransaction }
     }
 
-    fun saveTokenAccounts(tokenAccounts: List<TokenAccount>) {
+    suspend fun saveTokenAccounts(tokenAccounts: List<TokenAccount>) {
         tokenAccountDao.insert(tokenAccounts)
     }
 
-    fun saveMintAccounts(mintAccounts: List<MintAccount>) {
-        mintAccountDao.insert(mintAccounts)
+    suspend fun saveTokenAccounts(
+        tokenAccounts: List<TokenAccount>,
+        mintAccounts: List<MintAccount>
+    ) {
+        database.useWriterConnection { transactor ->
+            transactor.immediateTransaction {
+                tokenAccountDao.insert(tokenAccounts)
+                mintAccountDao.insert(mintAccounts)
+            }
+        }
     }
 
-    fun getTokenAccounts(mintAddresses: List<String>? = null): List<TokenAccount> =
+    suspend fun getTokenAccounts(mintAddresses: List<String>? = null): List<TokenAccount> =
         if (mintAddresses == null) tokenAccountDao.getAll()
         else tokenAccountDao.get(mintAddresses)
 
-    fun getFullTokenAccount(mintAddress: String): FullTokenAccount? =
+    suspend fun getFullTokenAccount(mintAddress: String): FullTokenAccount? =
         tokenAccountDao.get(mintAddress)?.fullTokenAccount
 
-    fun getFullTokenAccounts(): List<FullTokenAccount> =
+    suspend fun getFullTokenAccounts(): List<FullTokenAccount> =
         tokenAccountDao.getAllFullAccounts().map { it.fullTokenAccount }
 
-    fun tokenAccountExists(mintAddress: String): Boolean =
-        tokenAccountDao.getByMintAddress(mintAddress) != null
+    suspend fun addTokenAccountIfMissing(tokenAccount: TokenAccount, mintAccount: MintAccount) {
+        database.useWriterConnection { transactor ->
+            transactor.immediateTransaction {
+                if (tokenAccountDao.getByMintAddress(tokenAccount.mintAddress) != null) {
+                    return@immediateTransaction
+                }
 
-    fun addTokenAccount(tokenAccount: TokenAccount) {
-        tokenAccountDao.insert(tokenAccount)
-    }
-
-    fun addMintAccount(mintAccount: MintAccount) {
-        mintAccountDao.insert(mintAccount)
+                tokenAccountDao.insert(tokenAccount)
+                mintAccountDao.insert(mintAccount)
+            }
+        }
     }
 }
