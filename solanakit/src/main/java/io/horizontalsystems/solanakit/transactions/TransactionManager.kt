@@ -95,7 +95,11 @@ class TransactionManager(
     ): List<FullTransaction> =
         storage.getSplTransactions(mintAddress, incoming, fromHash, limit)
 
-    suspend fun handle(syncedTransactions: List<FullTransaction>) {
+    /**
+     * An empty synced token list keeps the stored transfers (the sync may lack mint metadata),
+     * except for [replaceTokenTransfersOf], whose synced token list is authoritative.
+     */
+    suspend fun handle(syncedTransactions: List<FullTransaction>, replaceTokenTransfersOf: Set<String> = emptySet()) {
         val existingMintAddresses = mutableListOf<String>()
 
         if (syncedTransactions.isNotEmpty()) {
@@ -121,12 +125,16 @@ class TransactionManager(
                             error = syncedTxHeader.error,
                             pending = syncedTxHeader.pending,
                         ),
-                        tokenTransfers = syncedTx.tokenTransfers.ifEmpty {
-                            for (tokenTransfer in existingTx.tokenTransfers) {
-                                existingMintAddresses.add(tokenTransfer.mintAccount.address)
-                            }
+                        tokenTransfers = if (syncedTxHeader.hash in replaceTokenTransfersOf) {
+                            syncedTx.tokenTransfers
+                        } else {
+                            syncedTx.tokenTransfers.ifEmpty {
+                                for (tokenTransfer in existingTx.tokenTransfers) {
+                                    existingMintAddresses.add(tokenTransfer.mintAccount.address)
+                                }
 
-                            existingTx.tokenTransfers
+                                existingTx.tokenTransfers
+                            }
                         }
                     )
                 }
@@ -158,7 +166,7 @@ class TransactionManager(
         incoming: Boolean?
     ): Boolean =
         tokenTransfers.any { fullTokenTransfer ->
-            if (fullTokenTransfer.mintAccount.address != mintAddress) return false
+            if (fullTokenTransfer.mintAccount.address != mintAddress) return@any false
             val incoming = incoming ?: return@any true
 
             fullTokenTransfer.tokenTransfer.incoming == incoming

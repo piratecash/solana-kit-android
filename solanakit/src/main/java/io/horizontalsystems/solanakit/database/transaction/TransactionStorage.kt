@@ -3,6 +3,7 @@ package io.horizontalsystems.solanakit.database.transaction
 import androidx.room.RoomRawQuery
 import androidx.room.immediateTransaction
 import androidx.room.useWriterConnection
+import io.horizontalsystems.solanakit.database.transaction.dao.TransactionsDao.TransactionKey
 import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.LastSyncedTransaction
@@ -25,6 +26,20 @@ class TransactionStorage(
     suspend fun setSyncedBlockTime(syncBlockTime: LastSyncedTransaction) {
         syncerStateDao.save(syncBlockTime)
     }
+
+    suspend fun tokenTransferRepairCursor(): String? =
+        syncerStateDao.get(TOKEN_TRANSFER_REPAIR_SOURCE)?.hash
+
+    suspend fun saveTokenTransferRepairCursor(cursor: String) {
+        syncerStateDao.save(LastSyncedTransaction(TOKEN_TRANSFER_REPAIR_SOURCE, cursor))
+    }
+
+    /** Confirmed transactions with token transfers strictly after the given position, newest first; -1 = no limit. */
+    suspend fun tokenTransferTransactionHashes(
+        beforeTimestamp: Long?,
+        beforeHash: String?,
+        limit: Int,
+    ): List<TransactionKey> = transactionsDao.tokenTransferTransactionKeys(beforeTimestamp, beforeHash, limit)
 
     suspend fun lastNonPendingTransaction(): Transaction? =
         transactionsDao.lastNonPendingTransaction()
@@ -141,7 +156,7 @@ class TransactionStorage(
         val limitClause = limit?.let { "LIMIT $it" } ?: ""
 
         val sqlQuery = """
-                      SELECT tx.*
+                      SELECT DISTINCT tx.*
                       FROM `Transaction` AS tx
                       ${if (joinTokenTransfers) "LEFT JOIN TokenTransfer AS tt ON tx.hash = tt.transactionHash" else ""}
                       $whereClause
@@ -162,8 +177,7 @@ class TransactionStorage(
         val sqlQuery = """
                       SELECT tx.*
                       FROM `Transaction` AS tx
-                      LEFT JOIN TokenTransfer AS tt ON tx.hash = tt.transactionHash
-                      WHERE tx.hash IN (${hashes.joinToString(", ", "'", "'")})
+                      WHERE tx.hash IN (${hashes.joinToString(", ") { "'$it'" }})
                       AND NOT tx.external
                       """
 
@@ -208,5 +222,10 @@ class TransactionStorage(
                 mintAccountDao.insert(mintAccount)
             }
         }
+    }
+
+    private companion object {
+        // Stored as a key-value row in LastSyncedTransaction, so no schema change is needed.
+        const val TOKEN_TRANSFER_REPAIR_SOURCE = "token-transfer-repair-v1"
     }
 }

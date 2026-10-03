@@ -62,6 +62,32 @@ class TransactionStorageAtomicityDesktopTest {
         }
     }
 
+    @Test
+    fun addTransactions_syncedVersionOfLocalSend_replacesTokenTransfer() = runBlocking {
+        val mintAccount = MintAccount(MINT_ADDRESS, 6)
+        storage.addTransactions(
+            listOf(
+                FullTransaction(
+                    transaction(FIRST_HASH),
+                    listOf(FullTokenTransfer(TokenTransfer(FIRST_HASH, MINT_ADDRESS, false, BigDecimal(-2)), mintAccount)),
+                )
+            )
+        )
+
+        storage.addTransactions(
+            listOf(
+                FullTransaction(
+                    transaction(FIRST_HASH).copy(pending = false),
+                    listOf(FullTokenTransfer(TokenTransfer(FIRST_HASH, MINT_ADDRESS, false, BigDecimal(2)), mintAccount)),
+                )
+            )
+        )
+
+        val tokenTransfer = storage.getFullTransactions(listOf(FIRST_HASH)).single().tokenTransfers.single().tokenTransfer
+        assertEquals(false, tokenTransfer.incoming)
+        assertEquals(0, BigDecimal(2).compareTo(tokenTransfer.amount))
+    }
+
     private fun transaction(hash: String) = Transaction(hash = hash, timestamp = 1_700_000_000)
 
     private companion object {
