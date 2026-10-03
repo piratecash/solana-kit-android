@@ -10,9 +10,9 @@ import io.horizontalsystems.solanakit.models.BalanceEntity
 interface BalanceDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    fun insert(balance: BalanceEntity)
+    suspend fun insert(balance: BalanceEntity)
 
     @Query("SELECT * FROM BalanceEntity")
-    fun getBalance(): BalanceEntity?
+    suspend fun getBalance(): BalanceEntity?
 
 }

@@ -1,12 +1,13 @@
 package io.horizontalsystems.solanakit.transactions
 
 import com.solana.api.Api
-import com.solana.rxsolana.api.getBlockHeight
+import com.solana.api.getBlockHeight
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.Transaction
-import kotlinx.coroutines.rx2.await
+import io.horizontalsystems.solanakit.network.SolanaNetworkErrorListener
+import io.horizontalsystems.solanakit.network.emitSafely
+import io.horizontalsystems.solanakit.network.toSolanaNetworkError
 import kotlinx.coroutines.withTimeout
-import org.sol4k.RpcUrl
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -16,16 +17,19 @@ import java.util.logging.Logger
 class PendingTransactionSyncer(
     private val rpcClient: Api,
     private val storage: TransactionStorage,
-    private val transactionManager: TransactionManager
+    private val transactionManager: TransactionManager,
+    private val rpcUrl: URL,
+    private val networkErrorListener: SolanaNetworkErrorListener?
 ) {
     private val logger = Logger.getLogger("PendingTransactionSyncer")
 
     suspend fun sync() {
         val updatedTransactions = mutableListOf<Transaction>()
+        val externalTransactionsToDelete = mutableListOf<String>()
 
         val pendingTransactions = storage.pendingTransactions()
         val currentBlockHeight = try {
-            rpcClient.getBlockHeight().await()
+            rpcClient.getBlockHeight().getOrThrow()
         } catch (error: Throwable) {
             return
         }
@@ -37,9 +41,13 @@ class PendingTransactionSyncer(
                 }
 
                 confirmedTransaction.onSuccess { transaction ->
-                    updatedTransactions.add(
-                        pendingTx.copy(pending = false, error = transaction.meta?.err?.toString())
-                    )
+                    if (pendingTx.external) {
+                        externalTransactionsToDelete.add(pendingTx.hash)
+                    } else {
+                        updatedTransactions.add(
+                            pendingTx.copy(pending = false, error = transaction.meta?.err?.toString())
+                        )
+                    }
                 }
 
             } catch (error: Throwable) {
@@ -49,6 +57,8 @@ class PendingTransactionSyncer(
                     updatedTransactions.add(
                         pendingTx.copy(retryCount = pendingTx.retryCount + 1)
                     )
+                } else if (pendingTx.external) {
+                    externalTransactionsToDelete.add(pendingTx.hash)
                 } else {
                     updatedTransactions.add(
                         pendingTx.copy(pending = false, error = "BlockHash expired")
@@ -59,13 +69,18 @@ class PendingTransactionSyncer(
             }
         }
 
+        storage.deleteExternalTransactions(externalTransactionsToDelete)
         storage.updateTransactions(updatedTransactions)
-        transactionManager.notifyTransactionsUpdate(storage.getFullTransactions(updatedTransactions.map { it.hash }))
+
+        val visibleTransactionHashes = updatedTransactions.filterNot { it.external }.map { it.hash }
+        if (visibleTransactionHashes.isNotEmpty()) {
+            transactionManager.notifyTransactionsUpdate(storage.getFullTransactions(visibleTransactionHashes))
+        }
     }
 
     private fun sendTransaction(encodedTransaction: String) {
         try {
-            val connection = URL(RpcUrl.MAINNNET.value).openConnection() as HttpURLConnection
+            val connection = rpcUrl.openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
             connection.setRequestProperty("Content-Type", "application/json")
             connection.doOutput = true
@@ -88,13 +103,20 @@ class PendingTransactionSyncer(
 
                 it.write(body.toByteArray())
             }
-            val responseBody = connection.inputStream.use {
+            connection.inputStream.use {
                 BufferedReader(InputStreamReader(it)).use { reader ->
                     reader.readText()
                 }
             }
             connection.disconnect()
         } catch (e: Throwable) {
+            networkErrorListener.emitSafely {
+                rpcUrl.toSolanaNetworkError(
+                    source = "solana-rpc-pending",
+                    method = "sendTransaction",
+                    throwable = e
+                )
+            }
         }
     }
 

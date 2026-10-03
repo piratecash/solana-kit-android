@@ -10,9 +10,9 @@ import io.horizontalsystems.solanakit.models.LastSyncedTransaction
 interface TransactionSyncerStateDao {
 
     @Query("SELECT * FROM LastSyncedTransaction WHERE syncSourceName = :syncSourceName LIMIT 1")
-    fun get(syncSourceName: String) : LastSyncedTransaction?
+    suspend fun get(syncSourceName: String) : LastSyncedTransaction?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    fun save(transactionSyncerState: LastSyncedTransaction)
+    suspend fun save(transactionSyncerState: LastSyncedTransaction)
 
 }

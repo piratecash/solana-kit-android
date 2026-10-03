@@ -2,14 +2,17 @@ package io.horizontalsystems.solanakit.transactions
 
 import com.solana.actions.Action
 import com.solana.actions.findSPLTokenDestinationAddress
-import com.solana.actions.serializeAndSendWithFee
 import com.solana.api.Api
 import com.solana.api.MultipleAccountsRequest
 import com.solana.core.Account
 import com.solana.core.PublicKey
+import org.sol4k.Base58
 import com.solana.core.Transaction
 import com.solana.core.TransactionInstruction
 import com.solana.models.RpcSendTransactionConfig
+import com.solana.networking.Commitment
+import com.solana.networking.RpcRequest
+import com.solana.networking.makeRequestResult
 import com.solana.networking.serialization.serializers.base64.BorshAsBase64JsonArraySerializer
 import com.solana.networking.serialization.serializers.solana.AnchorAccountSerializer
 import com.solana.networking.serialization.serializers.solana.SolanaResponseSerializer
@@ -29,7 +32,18 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.nullable
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.put
 import java.util.Base64
+
+internal data class SignedSolanaTransactionData(
+    val signature: String,
+    val raw: ByteArray,
+    val base64Encoded: String,
+)
 
 fun <T> Api.getMultipleAccountsFixed(
     serializer: KSerializer<T>,
@@ -99,7 +113,7 @@ suspend fun Api.getMultipleMintAccountsInfo(
 ): Result<List<MintTokenAccountValue>?> =
     router.makeRequestResultWithRepeat(
         request = MultipleAccountsRequest(
-            accounts = accounts.map { it.toBase58() },
+            accounts = accounts.map { Base58.encode(it.pubkey) },
             encoding = encoding,
             commitment = commitment,
             length = length,
@@ -122,7 +136,7 @@ suspend fun <A> Api.getMultipleAccountsInfo(
 ): Result<List<AccountInfoFixed<A>?>> =
     router.makeRequestResultWithRepeat(
         request = MultipleAccountsRequest(
-            accounts = accounts.map { it.toBase58() },
+            accounts = accounts.map { Base58.encode(it.pubkey) },
             encoding = encoding,
             commitment = commitment,
             length = length,
@@ -145,32 +159,24 @@ internal fun <A> MultipleAccountsSerializer(serializer: KSerializer<A>) =
 private fun <D> MultipleAccountsInfoSerializer(serializer: KSerializer<D>) =
     SolanaResponseSerializer(ListSerializer(AccountInfoFixed.serializer(serializer).nullable))
 
-fun Action.sendSOL(
+internal fun Action.signSOL(
     account: Account,
     destination: PublicKey,
     amount: Long,
     instructions: List<TransactionInstruction>,
     recentBlockHash: String
-) = Single.create { emitter ->
-    val transferInstruction = SystemProgram.transfer(account.publicKey, destination, amount)
+) = Single.fromCallable {
     val transaction = Transaction()
 
     if (instructions.isNotEmpty()) {
         transaction.add(*instructions.toTypedArray())
     }
 
-    transaction.add(transferInstruction)
-
-    this.serializeAndSendWithFee(transaction, listOf(account), recentBlockHash) { result ->
-        result.onSuccess {
-            emitter.onSuccess(Pair(it, encodeBase64(transaction)))
-        }.onFailure {
-            emitter.onError(it)
-        }
-    }
+    transaction.add(SystemProgram.transfer(account.publicKey, destination, amount))
+    transaction.signAndSerialize(account, recentBlockHash)
 }
 
-fun Action.sendSPLTokens(
+internal fun Action.signSPLTokens(
     mintAddress: PublicKey,
     fromPublicKey: PublicKey,
     destinationAddress: PublicKey,
@@ -189,7 +195,7 @@ fun Action.sendSPLTokens(
     }.flatMap { spl ->
         val toPublicKey = spl.first
         val unregisteredAssociatedToken = spl.second
-        if (fromPublicKey.toBase58() == toPublicKey.toBase58()) {
+        if (Base58.encode(fromPublicKey.pubkey) == Base58.encode(toPublicKey.pubkey)) {
             return@flatMap ContResult.failure(ResultError("Same send and destination address."))
         }
         val transaction = Transaction()
@@ -198,45 +204,68 @@ fun Action.sendSPLTokens(
             transaction.add(*instructions.toTypedArray())
         }
 
-        // create associated token address
         if (unregisteredAssociatedToken) {
-            val mint = mintAddress
-            val owner = destinationAddress
             val createATokenInstruction =
                 AssociatedTokenProgram.createAssociatedTokenAccountInstruction(
-                    mint = mint,
+                    mint = mintAddress,
                     associatedAccount = toPublicKey,
-                    owner = owner,
+                    owner = destinationAddress,
                     payer = account.publicKey
                 )
             transaction.add(createATokenInstruction)
         }
 
-        // send instruction
-        val sendInstruction =
-            TokenProgram.transfer(fromPublicKey, toPublicKey, amount, account.publicKey)
-        transaction.add(sendInstruction)
+        transaction.add(TokenProgram.transfer(fromPublicKey, toPublicKey, amount, account.publicKey))
         return@flatMap ContResult.success(transaction)
-    }.flatMap { transaction ->
-        return@flatMap ContResult<Pair<String, String>, ResultError> { cb ->
-            this.serializeAndSendWithFee(transaction, listOf(account), recentBlockHash) { result ->
-                result.onSuccess {
-                    cb(com.solana.vendor.Result.success(Pair(it, encodeBase64(transaction))))
-                }.onFailure {
-                    cb(com.solana.vendor.Result.failure(ResultError(it)))
-                }
-            }
-        }
     }.run { result ->
-        result.onSuccess {
-            emitter.onSuccess(it)
+        result.onSuccess { transaction ->
+            try {
+                emitter.onSuccess(transaction.signAndSerialize(account, recentBlockHash))
+            } catch (error: Throwable) {
+                emitter.onError(error)
+            }
         }.onFailure {
             emitter.onError(it)
         }
     }
 }
 
-private fun encodeBase64(transaction: Transaction): String {
-    val serialized = transaction.serialize()
-    return Base64.getEncoder().encodeToString(serialized)
+internal suspend fun Api.sendRawTransactionWithoutRetries(transaction: ByteArray): Result<String> {
+    val base64Transaction = Base64.getEncoder().encodeToString(transaction)
+    return router.makeRequestResult(
+        SendRawTransactionNoRetriesRequest(base64Transaction),
+        String.serializer()
+    ).let { result ->
+        @Suppress("UNCHECKED_CAST")
+        if (result.isSuccess && result.getOrNull() == null) {
+            Result.failure(Error("Can not send transaction"))
+        } else {
+            result as Result<String>
+        }
+    }
 }
+
+private fun Transaction.signAndSerialize(account: Account, recentBlockHash: String): SignedSolanaTransactionData {
+    setRecentBlockHash(recentBlockHash)
+    sign(listOf(account))
+    val signature = requireNotNull(signature) { "Signed transaction has no signature" }
+    val raw = serialize()
+    return SignedSolanaTransactionData(
+        signature = Base58.encode(signature),
+        raw = raw,
+        base64Encoded = Base64.getEncoder().encodeToString(raw),
+    )
+}
+
+private class SendRawTransactionNoRetriesRequest(serializedTransaction: String) : RpcRequest(
+    method = "sendTransaction",
+    params = buildJsonArray {
+        add(serializedTransaction)
+        addJsonObject {
+            put("encoding", RpcSendTransactionConfig.Encoding.base64.getEncoding())
+            put("skipPreflight", false)
+            put("preflightCommitment", Commitment.CONFIRMED.toString())
+            put("maxRetries", 0)
+        }
+    }
+)
