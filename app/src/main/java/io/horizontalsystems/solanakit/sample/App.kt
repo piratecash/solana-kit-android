@@ -37,9 +37,7 @@ class App : Application() {
             addressString = address,
             rpcSource = Configuration.rpcSource,
             walletId = Configuration.walletId,
-            databaseKey = databaseKey,
-            limitTimeTransactionCount = 2,
-            limitFirstTimeTransactionCount = 2
+            databaseKey = databaseKey
         )
     }
 

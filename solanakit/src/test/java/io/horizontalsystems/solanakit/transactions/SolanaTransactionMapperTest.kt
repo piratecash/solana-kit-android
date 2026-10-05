@@ -13,6 +13,7 @@ import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.MintAccount
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -279,6 +280,68 @@ class SolanaTransactionMapperTest {
 
         assertTrue(hashes.isEmpty())
     }
+
+    @Test
+    fun hashesWithoutUserTokenChanges_tokenBalanceListMissing_returnsEmpty() {
+        val result = tokenTransfer(signature = "sig", pre = emptyList(), post = emptyList())
+        val meta = checkNotNull(result.meta)
+        val withoutPre = result.copy(meta = meta.copy(preTokenBalances = null)).withSignature("noPreSig")
+        val withoutPost = result.copy(meta = meta.copy(postTokenBalances = null)).withSignature("noPostSig")
+
+        val hashes = SolanaTransactionMapper.hashesWithoutUserTokenChanges("USER", listOf(result, withoutPre, withoutPost))
+
+        assertEquals(setOf("sig"), hashes)
+    }
+
+    @Test
+    fun map_oneTokenBalanceListMissing_derivesNoTokenChange() {
+        val result = tokenTransfer(
+            signature = "sig",
+            pre = listOf(tokenBalance(USDC, "100", "USER", 1)),
+            post = listOf(tokenBalance(USDC, "105", "USER", 1)),
+        )
+        val meta = checkNotNull(result.meta)
+        val withoutPre = result.copy(meta = meta.copy(preTokenBalances = null))
+        val withoutPost = result.copy(meta = meta.copy(postTokenBalances = null))
+
+        listOf(withoutPre, withoutPost).forEach { partial ->
+            val mapped = SolanaTransactionMapper.map("USER", listOf(partial), mapOf(USDC to MintAccount(USDC, 6)))
+
+            assertTrue(mapped.single().tokenTransfers.isEmpty())
+            assertTrue(SolanaTransactionMapper.userMints("USER", listOf(partial)).isEmpty())
+        }
+    }
+
+    @Test
+    fun map_tokenBalanceListsMissingWithoutUserSolTransfer_keepsSolAmountNull() {
+        val result = transactionResult(
+            signature = "oldTokenSig",
+            accountKeys = listOf("USER", "USER_ATA", WellKnownPrograms.TOKEN_PROGRAM),
+            instructions = emptyList(),
+            fee = 5_000L,
+            preBalances = listOf(1_000_000L, 2_039_280L, 1L),
+            postBalances = listOf(995_000L, 2_039_280L, 1L),
+        )
+        val meta = checkNotNull(result.meta)
+
+        val mapped = mapSingle(result.copy(meta = meta.copy(preTokenBalances = null, postTokenBalances = null)))
+
+        assertNull(mapped.transaction.amount)
+    }
+
+    @Test
+    fun map_tokenBalanceListsMissingWithUserSolTransfer_keepsSolAmount() {
+        val result = solTransferToUser(preTokenBalances = emptyList(), postTokenBalances = emptyList())
+        val meta = checkNotNull(result.meta)
+
+        val mapped = mapSingle(result.copy(meta = meta.copy(preTokenBalances = null, postTokenBalances = null)))
+
+        assertNotNull(mapped.transaction.amount)
+        assertEquals(mapSingle(result).transaction.amount, mapped.transaction.amount)
+    }
+
+    private fun TransactionResult.withSignature(signature: String) =
+        copy(transaction = transaction?.copy(signatures = listOf(signature)))
 
     private fun tokenTransfer(signature: String, pre: List<TokenBalance>, post: List<TokenBalance>) = transactionResult(
         signature = signature,

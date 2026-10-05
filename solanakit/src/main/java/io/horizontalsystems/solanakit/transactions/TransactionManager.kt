@@ -19,6 +19,7 @@ import io.horizontalsystems.solanakit.models.RawTransactionRetryMetadata
 import io.horizontalsystems.solanakit.models.SignedRawSolanaTransaction
 import io.horizontalsystems.solanakit.models.TokenTransfer
 import io.horizontalsystems.solanakit.models.Transaction
+import io.horizontalsystems.solanakit.network.FailoverRpcRouter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.rx2.await
 import org.sol4k.Connection
+import org.sol4k.api.Blockhash
 import org.sol4k.api.Commitment
 import java.math.BigDecimal
 import java.time.Instant
@@ -38,11 +40,10 @@ class TransactionManager(
     private val storage: TransactionStorage,
     private val rpcAction: Action,
     private val tokenAccountManager: TokenAccountManager,
-    rpcUrl: String,
+    private val router: FailoverRpcRouter,
 ) {
 
     private val addressString = Base58.encode(address.publicKey.pubkey)
-    private val connection = Connection(rpcUrl)
     private val logger = Logger.getLogger("TransactionManager")
     private val _transactionsFlow = MutableStateFlow<List<FullTransaction>>(listOf())
     val transactionsFlow: StateFlow<List<FullTransaction>> = _transactionsFlow
@@ -95,54 +96,60 @@ class TransactionManager(
     ): List<FullTransaction> =
         storage.getSplTransactions(mintAddress, incoming, fromHash, limit)
 
+    suspend fun handle(syncedTransactions: List<FullTransaction>, replaceTokenTransfersOf: Set<String> = emptySet()) =
+        notifyTransactionsUpdate(store(syncedTransactions, replaceTokenTransfersOf))
+
     /**
-     * An empty synced token list keeps the stored transfers (the sync may lack mint metadata),
-     * except for [replaceTokenTransfersOf], whose synced token list is authoritative.
+     * Stores without notifying and returns the stored rows. An empty synced token list keeps the stored
+     * transfers (the sync may lack mint metadata), except for [replaceTokenTransfersOf], whose synced
+     * token list is authoritative.
      */
-    suspend fun handle(syncedTransactions: List<FullTransaction>, replaceTokenTransfersOf: Set<String> = emptySet()) {
+    suspend fun store(
+        syncedTransactions: List<FullTransaction>,
+        replaceTokenTransfersOf: Set<String> = emptySet(),
+    ): List<FullTransaction> {
         val existingMintAddresses = mutableListOf<String>()
 
-        if (syncedTransactions.isNotEmpty()) {
-            val existingTransactionsMap =
-                storage.getFullTransactions(syncedTransactions.map { it.transaction.hash })
-                    .groupBy { it.transaction.hash }
-            val transactions = syncedTransactions.map { syncedTx ->
-                val existingTx = existingTransactionsMap[syncedTx.transaction.hash]?.firstOrNull()
+        if (syncedTransactions.isEmpty()) return emptyList()
+        val existingTransactionsMap =
+            storage.getFullTransactions(syncedTransactions.map { it.transaction.hash })
+                .groupBy { it.transaction.hash }
+        val transactions = syncedTransactions.map { syncedTx ->
+            val existingTx = existingTransactionsMap[syncedTx.transaction.hash]?.firstOrNull()
 
-                if (existingTx == null) syncedTx
-                else {
-                    val syncedTxHeader = syncedTx.transaction
-                    val existingTxHeader = existingTx.transaction
+            if (existingTx == null) syncedTx
+            else {
+                val syncedTxHeader = syncedTx.transaction
+                val existingTxHeader = existingTx.transaction
 
-                    FullTransaction(
-                        transaction = Transaction(
-                            hash = syncedTxHeader.hash,
-                            timestamp = syncedTxHeader.timestamp,
-                            fee = syncedTxHeader.fee,
-                            from = syncedTxHeader.from ?: existingTxHeader.from,
-                            to = syncedTxHeader.to ?: existingTxHeader.to,
-                            amount = syncedTxHeader.amount ?: existingTxHeader.amount,
-                            error = syncedTxHeader.error,
-                            pending = syncedTxHeader.pending,
-                        ),
-                        tokenTransfers = if (syncedTxHeader.hash in replaceTokenTransfersOf) {
-                            syncedTx.tokenTransfers
-                        } else {
-                            syncedTx.tokenTransfers.ifEmpty {
-                                for (tokenTransfer in existingTx.tokenTransfers) {
-                                    existingMintAddresses.add(tokenTransfer.mintAccount.address)
-                                }
-
-                                existingTx.tokenTransfers
+                FullTransaction(
+                    transaction = Transaction(
+                        hash = syncedTxHeader.hash,
+                        timestamp = syncedTxHeader.timestamp,
+                        fee = syncedTxHeader.fee,
+                        from = syncedTxHeader.from ?: existingTxHeader.from,
+                        to = syncedTxHeader.to ?: existingTxHeader.to,
+                        amount = syncedTxHeader.amount ?: existingTxHeader.amount,
+                        error = syncedTxHeader.error,
+                        pending = syncedTxHeader.pending,
+                    ),
+                    tokenTransfers = if (syncedTxHeader.hash in replaceTokenTransfersOf) {
+                        syncedTx.tokenTransfers
+                    } else {
+                        syncedTx.tokenTransfers.ifEmpty {
+                            for (tokenTransfer in existingTx.tokenTransfers) {
+                                existingMintAddresses.add(tokenTransfer.mintAccount.address)
                             }
-                        }
-                    )
-                }
-            }
 
-            storage.addTransactions(transactions)
-            notifyTransactionsUpdate(transactions)
+                            existingTx.tokenTransfers
+                        }
+                    }
+                )
+            }
         }
+
+        storage.addTransactions(transactions)
+        return transactions
     }
 
     fun notifyTransactionsUpdate(transactions: List<FullTransaction>) {
@@ -173,7 +180,7 @@ class TransactionManager(
         }
 
     suspend fun signedSolTransaction(toAddress: Address, amount: Long, signerAccount: Account): SignedRawSolanaTransaction {
-        val blockHash = connection.getLatestBlockhashExtended(Commitment.FINALIZED)
+        val blockHash = latestBlockhash()
         val signedTransaction = rpcAction.signSOL(
             account = signerAccount,
             destination = toAddress.publicKey,
@@ -210,6 +217,11 @@ class TransactionManager(
 
         return fullTransaction
     }
+
+    suspend fun latestBlockhash(): Blockhash =
+        router.withDirectUrl("getLatestBlockhash") { url ->
+            Connection(url.toString()).getLatestBlockhashExtended(Commitment.FINALIZED)
+        }
 
     private fun priorityFeeInstructions(): List<TransactionInstruction> {
         val computeUnitLimit = ComputeBudgetProgram.setComputeUnitLimit(units = 300_000)
@@ -290,7 +302,7 @@ class TransactionManager(
         fullTokenAccount: FullTokenAccount,
     ): SignedRawSolanaTransaction {
         val tokenAccount = fullTokenAccount.tokenAccount
-        val blockHash = connection.getLatestBlockhashExtended(Commitment.FINALIZED)
+        val blockHash = latestBlockhash()
 
         val signedTransaction = rpcAction.signSPLTokens(
             mintAddress = mintAddress.publicKey,

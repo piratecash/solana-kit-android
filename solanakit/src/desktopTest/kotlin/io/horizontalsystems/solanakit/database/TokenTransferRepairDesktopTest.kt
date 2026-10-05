@@ -1,49 +1,27 @@
 package io.horizontalsystems.solanakit.database
 
-import com.solana.actions.Action
-import com.solana.api.Api
 import com.solana.api.Header
 import com.solana.api.Message
 import com.solana.api.Meta
 import com.solana.api.Status
 import com.solana.api.TokenAmountInfo
 import com.solana.api.TokenBalance
-import com.solana.core.PublicKey
-import com.solana.networking.NetworkingRouter
-import com.solana.networking.RPCEndpoint
-import com.solana.networking.RpcError
-import com.solana.networking.RpcRequest
-import com.solana.networking.RpcResponse
-import io.horizontalsystems.solanakit.PlatformContext
 import io.horizontalsystems.solanakit.SolanaKit
-import io.horizontalsystems.solanakit.core.TokenAccountManager
-import io.horizontalsystems.solanakit.database.main.MainDatabase
-import io.horizontalsystems.solanakit.database.main.MainStorage
-import io.horizontalsystems.solanakit.database.transaction.TransactionDatabase
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.database.transaction.dao.TransactionsDao.TransactionKey
-import io.horizontalsystems.solanakit.models.Address
 import io.horizontalsystems.solanakit.models.FullTokenTransfer
 import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.MintAccount
 import io.horizontalsystems.solanakit.models.TokenTransfer
 import io.horizontalsystems.solanakit.models.Transaction
-import io.horizontalsystems.solanakit.transactions.MintTokenAccountInfo
-import io.horizontalsystems.solanakit.transactions.MintTokenAccountInfoParsedData
-import io.horizontalsystems.solanakit.transactions.MintTokenAccountTokenInfo
-import io.horizontalsystems.solanakit.transactions.MintTokenAccountValue
-import io.horizontalsystems.solanakit.transactions.PendingTransactionSyncer
 import io.horizontalsystems.solanakit.transactions.SolanaTransactionMapper
 import io.horizontalsystems.solanakit.transactions.TransactionManager
 import io.horizontalsystems.solanakit.transactions.TransactionResult
 import io.horizontalsystems.solanakit.transactions.TransactionSyncer
 import io.horizontalsystems.solanakit.transactions.WellKnownPrograms
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -55,7 +33,6 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.sol4k.Base58
 import java.math.BigDecimal
-import java.net.URL
 import com.solana.api.Transaction as RpcTransaction
 
 class TokenTransferRepairDesktopTest {
@@ -64,42 +41,22 @@ class TokenTransferRepairDesktopTest {
     val tmp = TemporaryFolder()
 
     private val rpcTransactions = mutableMapOf<String, TransactionResult>()
-    private lateinit var transactionDatabase: TransactionDatabase
-    private lateinit var mainDatabase: MainDatabase
+    private lateinit var kit: SyncerFixture
     private lateinit var storage: TransactionStorage
     private lateinit var transactionManager: TransactionManager
     private lateinit var syncer: TransactionSyncer
 
     @Before
     fun setUp() {
-        val context = PlatformContext(tmp.root)
-        transactionDatabase = TransactionDatabase.getInstance(context, "Solana-repair-txs", DATABASE_KEY)
-        mainDatabase = MainDatabase.getInstance(context, "Solana-repair-main", DATABASE_KEY)
-        storage = TransactionStorage(transactionDatabase, USER)
-
-        val api = Api(FakeRpcRouter(rpcTransactions))
-        transactionManager = TransactionManager(
-            address = Address(USER),
-            storage = storage,
-            rpcAction = Action(api, emptyList()),
-            tokenAccountManager = TokenAccountManager(USER, api, storage, MainStorage(mainDatabase)),
-            rpcUrl = LOCALHOST,
-        )
-        syncer = TransactionSyncer(
-            publicKey = PublicKey(USER),
-            rpcClient = api,
-            storage = storage,
-            transactionManager = transactionManager,
-            pendingTransactionSyncer = PendingTransactionSyncer(api, storage, transactionManager, URL(LOCALHOST), null),
-            limitFirstTimeTransactionCount = -1,
-            limitTimeTransactionCount = 2,
-        )
+        kit = SyncerFixture(tmp.root, "Solana-repair", USER, FakeRpcRouter(rpcTransactions))
+        storage = kit.storage
+        transactionManager = kit.transactionManager
+        syncer = kit.syncer
     }
 
     @After
     fun tearDown() {
-        transactionDatabase.close()
-        mainDatabase.close()
+        kit.close()
     }
 
     @Test
@@ -148,6 +105,11 @@ class TokenTransferRepairDesktopTest {
 
     @Test
     fun sync_blockTimeEarlierThanDeviceTimestamp_cursorDoesNotSkipNextRow() = runBlocking {
+        // Fills the repair batch so that it ends at hashB.
+        (1..18).forEach { index ->
+            storeLegacyTransfer("newer$index", timestamp = 300L + index)
+            rpcTransactions["newer$index"] = incomingTransfer("newer$index", blockTime = 300L + index)
+        }
         storeLegacyTransfer("hashA", timestamp = 300)
         storeLegacyTransfer("hashB", timestamp = 200)
         storeLegacyTransfer("hashC", timestamp = 195)
@@ -259,6 +221,27 @@ class TokenTransferRepairDesktopTest {
         assertEquals(storedHeader, stored.transaction)
         assertEquals(1, stored.tokenTransfers.size)
         assertEquals("1700000100:noMetaHash", storage.tokenTransferRepairCursor())
+    }
+
+    @Test
+    fun sync_remapWithOneTokenBalanceListMissing_keepsStoredTransferAmount() = runBlocking {
+        listOf("noPreHash", "noPostHash").forEach { hash ->
+            storeLegacyTransfer(hash, timestamp = 1_700_000_100)
+            val remap = incomingTransfer(hash, blockTime = 1_700_000_000)
+            val meta = checkNotNull(remap.meta)
+            val partial = if (hash == "noPreHash") meta.copy(preTokenBalances = null) else meta.copy(postTokenBalances = null)
+            rpcTransactions[hash] = remap.copy(meta = partial)
+        }
+
+        syncer.sync()
+
+        val stored = storage.getFullTransactions(listOf("noPreHash", "noPostHash"))
+        assertEquals(2, stored.size)
+        stored.forEach { row ->
+            val tokenTransfer = row.tokenTransfers.single().tokenTransfer
+            assertEquals(0, BigDecimal(TRANSFER_AMOUNT).compareTo(tokenTransfer.amount))
+            assertFalse(tokenTransfer.incoming)
+        }
     }
 
     @Test
@@ -374,43 +357,12 @@ class TokenTransferRepairDesktopTest {
         owner = owner,
     )
 
-    /** Answers getTransaction and getMultipleAccounts; every other call fails like an unreachable node. */
-    private class FakeRpcRouter(private val transactions: Map<String, TransactionResult>) : NetworkingRouter {
-        override val endpoint: RPCEndpoint get() = error("not used")
-
-        @Suppress("UNCHECKED_CAST")
-        override suspend fun <R> makeRequest(request: RpcRequest, resultSerializer: KSerializer<R>): RpcResponse<R> {
-            val params = request.params?.jsonArray
-            val result: Any? = when (request.method) {
-                "getTransaction" -> transactions[params?.get(0)?.jsonPrimitive?.content]
-                "getMultipleAccounts" -> params?.get(0)?.jsonArray?.map { mintAccountValue(it.jsonPrimitive.content) }
-                else -> return RpcResponse(error = RpcError(code = -1, message = "unavailable"))
-            }
-            return RpcResponse(result = result as R?)
-        }
-
-        // A mint owned by another program (e.g. Token-2022) yields no MintAccount.
-        private fun mintAccountValue(mint: String) = MintTokenAccountValue(
-            data = MintTokenAccountInfo(
-                parsed = MintTokenAccountInfoParsedData(
-                    info = MintTokenAccountTokenInfo(decimals = 6, isInitialized = true, mintAuthority = "AUTHORITY", supply = "1000"),
-                    type = "mint",
-                ),
-                program = "spl-token",
-            ),
-            owner = if (mint == TOKEN_2022_MINT) TOKEN_2022_PROGRAM else TransactionSyncer.tokenProgramId,
-        )
-    }
-
     private companion object {
-        val DATABASE_KEY = ByteArray(32) { it.toByte() }
         val USER: String = Base58.encode(ByteArray(32) { 7 })
         val MINT: String = Base58.encode(ByteArray(32) { 9 })
         val MINT_ACCOUNT = MintAccount(MINT, decimals = 6)
-        val TOKEN_2022_MINT: String = Base58.encode(ByteArray(32) { 13 })
-        const val TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        val TOKEN_2022_MINT = FakeRpcRouter.TOKEN_2022_MINT
         const val TRANSFER_AMOUNT = 1_000_047L
         const val SOL_AMOUNT = 1_000_000L
-        const val LOCALHOST = "http://localhost"
     }
 }

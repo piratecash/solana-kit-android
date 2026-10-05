@@ -27,6 +27,9 @@ class TransactionStorage(
         syncerStateDao.save(syncBlockTime)
     }
 
+    suspend fun syncSourceNames(prefix: String): List<String> =
+        syncerStateDao.namesWithPrefix(prefix)
+
     suspend fun tokenTransferRepairCursor(): String? =
         syncerStateDao.get(TOKEN_TRANSFER_REPAIR_SOURCE)?.hash
 
@@ -40,9 +43,6 @@ class TransactionStorage(
         beforeHash: String?,
         limit: Int,
     ): List<TransactionKey> = transactionsDao.tokenTransferTransactionKeys(beforeTimestamp, beforeHash, limit)
-
-    suspend fun lastNonPendingTransaction(): Transaction? =
-        transactionsDao.lastNonPendingTransaction()
 
     suspend fun pendingTransactions(): List<Transaction> =
         transactionsDao.pendingTransactions()
@@ -171,6 +171,17 @@ class TransactionStorage(
     suspend fun getMintAccount(address: String): MintAccount? =
         mintAccountDao.get(address)
 
+    /**
+     * Hashes among [hashes] stored as mapped history. A confirmed own send keeps its send-time
+     * placeholder data (and its signed bytes) until history remaps it.
+     */
+    suspend fun storedHashes(hashes: List<String>): Set<String> =
+        hashes.chunked(HASH_QUERY_CHUNK).flatMapTo(HashSet()) { chunk ->
+            getFullTransactions(chunk).map { it.transaction }
+                .filter { !it.pending && it.base64Encoded.isEmpty() }
+                .map { it.hash }
+        }
+
     suspend fun getFullTransactions(hashes: List<String>): List<FullTransaction> {
         if (hashes.isEmpty()) return emptyList()
 
@@ -227,5 +238,8 @@ class TransactionStorage(
     private companion object {
         // Stored as a key-value row in LastSyncedTransaction, so no schema change is needed.
         const val TOKEN_TRANSFER_REPAIR_SOURCE = "token-transfer-repair-v1"
+
+        // Keeps the inlined IN list far below SQLite's statement length limit.
+        const val HASH_QUERY_CHUNK = 500
     }
 }

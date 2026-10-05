@@ -1,14 +1,12 @@
 package io.horizontalsystems.solanakit.noderpc.endpoints
 
 import com.solana.api.Api
-import com.solana.api.SignatureInformation
 import com.solana.core.PublicKey
 import com.solana.networking.RpcRequest
 import io.horizontalsystems.solanakit.network.makeRequestResultWithRepeat
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
@@ -31,35 +29,24 @@ class GetConfirmedSignaturesForAddressRequest(
     }
 }
 
-suspend fun Api.getSignaturesForAddress(
+/** A missing list is a failure too: read as an empty page, it would end the listing early. */
+internal suspend fun Api.getSignaturesForAddress(
     account: PublicKey,
     limit: Int? = null,
     before: String? = null,
     until: String? = null
-): Result<List<SignatureInformation>?> {
-    return router.makeRequestResultWithRepeat(
+): Result<List<RpcSignatureInformation>> =
+    router.makeRequestResultWithRepeat(
         request = GetConfirmedSignaturesForAddressRequest(account, limit, before, until),
         serializer = ListSerializer(RpcSignatureInformation.serializer())
-    ).map { signatures ->
-        signatures?.map { it.toSignatureInformation() }
-    }
-}
+    ).mapCatching { checkNotNull(it) { "No signature list" } }
 
 @Serializable
 internal data class RpcSignatureInformation(
     val err: JsonElement? = null,
     val memo: JsonElement? = null,
-    val signature: String? = null,
-    val confirmationStatus: String,
+    val signature: String,
+    val confirmationStatus: String?,
     val slot: Long,
-    val blockTime: Long
-) {
-    internal fun toSignatureInformation() = SignatureInformation(
-        err = err as? JsonObject,
-        memo = memo as? JsonObject,
-        signature = signature,
-        confirmationStatus = confirmationStatus,
-        slot = slot,
-        blockTime = blockTime
-    )
-}
+    val blockTime: Long?
+)

@@ -10,9 +10,6 @@ interface TransactionsDao {
     @Query("SELECT * FROM `Transaction` WHERE hash = :transactionHash LIMIT 1")
     suspend fun get(transactionHash: String) : Transaction?
 
-    @Query("SELECT * FROM `Transaction` WHERE NOT pending AND NOT external ORDER BY timestamp DESC LIMIT 1")
-    suspend fun lastNonPendingTransaction() : Transaction?
-
     @Query("SELECT * FROM `Transaction` WHERE pending ORDER BY timestamp")
     suspend fun pendingTransactions() : List<Transaction>
 

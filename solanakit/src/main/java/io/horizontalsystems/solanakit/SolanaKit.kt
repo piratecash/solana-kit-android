@@ -3,7 +3,6 @@ package io.horizontalsystems.solanakit
 import co.touchlab.kermit.Logger
 import com.solana.actions.Action
 import com.solana.api.Api
-import com.solana.networking.HttpNetworkingRouter
 import com.solana.networking.Network
 import io.horizontalsystems.solanakit.core.BalanceManager
 import io.horizontalsystems.solanakit.core.ISyncListener
@@ -23,12 +22,15 @@ import io.horizontalsystems.solanakit.models.RawTransactionRetryMetadata
 import io.horizontalsystems.solanakit.models.RpcSource
 import io.horizontalsystems.solanakit.models.SignedRawSolanaTransaction
 import io.horizontalsystems.solanakit.models.Transaction
+import io.horizontalsystems.solanakit.network.AlchemyEndpoint
+import io.horizontalsystems.solanakit.network.ApiKeyRotation
 import io.horizontalsystems.solanakit.network.ConnectionManager
+import io.horizontalsystems.solanakit.network.FailoverRpcRouter
+import io.horizontalsystems.solanakit.network.PublicPacer
 import io.horizontalsystems.solanakit.network.SolanaNetworkErrorListener
-import io.horizontalsystems.solanakit.network.emitSafely
-import io.horizontalsystems.solanakit.network.toSolanaNetworkError
 import io.horizontalsystems.solanakit.noderpc.ApiSyncer
 import io.horizontalsystems.solanakit.transactions.PendingTransactionSyncer
+import io.horizontalsystems.solanakit.transactions.TransactionFetcher
 import io.horizontalsystems.solanakit.transactions.TransactionManager
 import io.horizontalsystems.solanakit.transactions.TransactionSyncer
 import io.horizontalsystems.sqlcipher.room.DatabaseKeyMismatchException
@@ -50,11 +52,11 @@ import kotlinx.coroutines.launch
 import org.sol4k.Base58
 import org.sol4k.Connection
 import org.sol4k.VersionedTransaction
-import org.sol4k.api.Commitment
 import java.math.BigDecimal
 import java.time.Instant
 import java.util.Base64
 import java.util.Objects
+import kotlin.time.TimeSource
 
 class SolanaKit(
     private val apiSyncer: ApiSyncer,
@@ -64,6 +66,7 @@ class SolanaKit(
     private val syncManager: SyncManager,
     private val rpcSource: RpcSource,
     private val address: Address,
+    private val router: FailoverRpcRouter,
 ) : ISyncListener {
 
     private var scope: CoroutineScope? = null
@@ -110,15 +113,16 @@ class SolanaKit(
         return versionedTx.calculateFee(baseFeeLamports)
     }
 
-    fun sendRawTransaction(hexEncoded: ByteArray, signer: Signer): FullTransaction {
+    suspend fun sendRawTransaction(hexEncoded: ByteArray, signer: Signer): FullTransaction {
         val base64Encoded = Base64.getEncoder().encodeToString(hexEncoded)
         val versionedTx = VersionedTransaction.from(base64Encoded)
         val signature = Base58.encode(signer.account.sign(versionedTx.message.serialize()))
         versionedTx.addSignature(signature)
         val base64WithSignature = Base64.getEncoder().encodeToString(versionedTx.serialize())
-        val connection = Connection(rpcSource.url.toString())
-        val blockHash = connection.getLatestBlockhashExtended(Commitment.FINALIZED)
-        val transactionHash = connection.sendTransaction(versionedTx)
+        val blockHash = transactionManager.latestBlockhash()
+        val transactionHash = router.withDirectUrl("sendTransaction") { url ->
+            Connection(url.toString()).sendTransaction(versionedTx)
+        }
         val fullTransaction = FullTransaction(
             transaction = Transaction(
                 hash = transactionHash,
@@ -350,17 +354,18 @@ class SolanaKit(
             rpcSource: RpcSource,
             walletId: String,
             databaseKey: ByteArray,
-            limitFirstTimeTransactionCount: Int = -1,
-            limitTimeTransactionCount: Int = -1,
+            rpcApiKeys: List<String> = emptyList(),
             networkErrorListener: SolanaNetworkErrorListener? = null
         ): SolanaKit {
             requireValidDatabaseGroup(walletId, databaseKey)
 
-            val router = HttpNetworkingRouter(rpcSource.endpoint) { requestError ->
-                networkErrorListener.emitSafely {
-                    requestError.toSolanaNetworkError(source = "solana-rpc")
-                }
-            }
+            val router = FailoverRpcRouter(
+                publicEndpoint = rpcSource.endpoint,
+                keys = ApiKeyRotation.forNetwork(rpcSource.endpoint.network, rpcApiKeys),
+                alchemy = AlchemyEndpoint(),
+                pacer = PublicPacer(TimeSource.Monotonic),
+                networkErrorListener = networkErrorListener,
+            )
             val mainDatabase = SolanaDatabaseManager.getMainDatabase(context, walletId, databaseKey)
             val mainStorage = MainStorage(mainDatabase)
             val lastBlockHeight = mainStorage.getLastBlockHeight()
@@ -403,14 +408,14 @@ class SolanaKit(
                     storage = transactionStorage,
                     rpcAction = rpcAction,
                     tokenAccountManager = tokenAccountManager,
-                    rpcUrl = rpcSource.url.toString()
+                    router = router
                 )
             val pendingTransactionSyncer =
                 PendingTransactionSyncer(
                     rpcApiClient,
                     transactionStorage,
                     transactionManager,
-                    rpcSource.endpoint.url,
+                    router,
                     networkErrorListener
                 )
             val transactionSyncer = TransactionSyncer(
@@ -419,8 +424,7 @@ class SolanaKit(
                 storage = transactionStorage,
                 transactionManager = transactionManager,
                 pendingTransactionSyncer = pendingTransactionSyncer,
-                limitFirstTimeTransactionCount = limitFirstTimeTransactionCount,
-                limitTimeTransactionCount = limitTimeTransactionCount
+                fetcher = TransactionFetcher(router)
             )
 
             val syncManager = SyncManager(
@@ -438,7 +442,8 @@ class SolanaKit(
                 transactionManager,
                 syncManager,
                 rpcSource,
-                address
+                address,
+                router
             )
             syncManager.listener = kit
 

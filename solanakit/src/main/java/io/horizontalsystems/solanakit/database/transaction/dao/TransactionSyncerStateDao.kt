@@ -15,4 +15,7 @@ interface TransactionSyncerStateDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun save(transactionSyncerState: LastSyncedTransaction)
 
+    @Query("SELECT syncSourceName FROM LastSyncedTransaction WHERE substr(syncSourceName, 1, length(:prefix)) = :prefix")
+    suspend fun namesWithPrefix(prefix: String): List<String>
+
 }

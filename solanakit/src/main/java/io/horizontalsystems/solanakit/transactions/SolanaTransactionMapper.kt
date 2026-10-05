@@ -37,13 +37,13 @@ internal object SolanaTransactionMapper {
     }
 
     fun userMints(userAddress: String, results: List<TransactionResult>): Set<String> =
-        results.flatMap { tokenEntries(it.meta) }
+        results.flatMap { tokenEntries(it.meta).orEmpty() }
             .filter { it.isOwnedBy(userAddress) }
             .mapTo(LinkedHashSet()) { it.mint }
 
     /**
-     * Hashes of transactions proven not to touch the user's tokens: metadata present, succeeded,
-     * every token entry has a known owner, and none of the user's balances changed.
+     * Hashes of transactions proven not to touch the user's tokens: metadata and both token balance
+     * lists present, succeeded, every token entry has a known owner, and none of the user's balances changed.
      */
     fun hashesWithoutUserTokenChanges(userAddress: String, results: List<TransactionResult>): Set<String> =
         results.filter { provesNoUserTokenChange(userAddress, it.meta) }
@@ -51,7 +51,7 @@ internal object SolanaTransactionMapper {
 
     private fun provesNoUserTokenChange(userAddress: String, meta: Meta?): Boolean {
         if (meta == null || meta.err != null) return false
-        val entries = tokenEntries(meta)
+        val entries = tokenEntries(meta) ?: return false
         return entries.all { it.owner != null } && ownerTokenChanges(userAddress, entries).isEmpty()
     }
 
@@ -64,7 +64,8 @@ internal object SolanaTransactionMapper {
         val accountKeys = signatureInfo.fullAccountKeys()
         val hash = signatureInfo.hash()
 
-        val tokenEntries = tokenEntries(signatureInfo.meta)
+        val knownTokenEntries = tokenEntries(signatureInfo.meta)
+        val tokenEntries = knownTokenEntries.orEmpty()
         val tokenChanges = ownerTokenChanges(userAddress, tokenEntries)
         val isTokenTransfer = tokenChanges.isNotEmpty()
 
@@ -72,8 +73,11 @@ internal object SolanaTransactionMapper {
             instructions = message?.instructions.orEmpty(),
             accountKeys = accountKeys,
         )
-        // Absent from the account keys (a token-account-only tx), the user's SOL did not move.
-        val userTransfer = if (isTokenTransfer || userAddress !in accountKeys) null else SolanaUserTransferResolver.resolve(
+        // Absent from the account keys (a token-account-only tx), the user's SOL did not move; with
+        // unknown token balances only the user's own system transfer proves that it did.
+        val solUnmoved = isTokenTransfer || userAddress !in accountKeys ||
+            knownTokenEntries == null && transfers.none { it.involves(userAddress, accountKeys) }
+        val userTransfer = if (solUnmoved) null else SolanaUserTransferResolver.resolve(
             userAddress = userAddress,
             accountKeys = accountKeys,
             preBalances = signatureInfo.meta?.preBalances.orEmpty(),
@@ -89,7 +93,7 @@ internal object SolanaTransactionMapper {
         }
         val transaction = Transaction(
             hash = hash,
-            timestamp = signatureInfo.blockTime,
+            timestamp = signatureInfo.blockTime ?: 0,
             fee = toBigNumWithMovePointLeft(signatureInfo.meta?.fee),
             from = from,
             to = to,
@@ -103,11 +107,15 @@ internal object SolanaTransactionMapper {
         )
     }
 
+    private fun SolanaUserTransferResolver.Transfer.involves(userAddress: String, accountKeys: List<String>) =
+        accountKeys.getOrNull(fromIndex) == userAddress || accountKeys.getOrNull(toIndex) == userAddress
+
     // Pre/post entries of one token account are paired by accountIndex + mint; a missing side
-    // (account created or closed in this transaction) counts as a zero balance.
-    private fun tokenEntries(meta: Meta?): List<TokenEntry> {
-        val preByKey = meta?.preTokenBalances.orEmpty().associateBy { it.entryKey() }
-        val postByKey = meta?.postTokenBalances.orEmpty().associateBy { it.entryKey() }
+    // (account created or closed in this transaction) counts as a zero balance. A missing list
+    // leaves the token changes unknown (null), never zero.
+    private fun tokenEntries(meta: Meta?): List<TokenEntry>? {
+        val preByKey = meta?.preTokenBalances?.associateBy { it.entryKey() } ?: return null
+        val postByKey = meta.postTokenBalances?.associateBy { it.entryKey() } ?: return null
         return (postByKey.keys + preByKey.keys).map { key ->
             val post = postByKey[key]
             val pre = preByKey[key]

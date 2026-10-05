@@ -21,7 +21,7 @@ class TransactionManagerTest {
         storage = mockk(),
         rpcAction = mockk(),
         tokenAccountManager = mockk(),
-        rpcUrl = "http://localhost",
+        router = mockk(),
     )
 
     @Test

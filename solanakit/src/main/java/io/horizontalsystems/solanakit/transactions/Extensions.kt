@@ -110,21 +110,29 @@ suspend fun Api.getMultipleMintAccountsInfo(
     commitment: String = "max",
     length: Int? = null,
     offset: Int? = length?.let { 0 }
-): Result<List<MintTokenAccountValue>?> =
-    router.makeRequestResultWithRepeat(
-        request = MultipleAccountsRequest(
-            accounts = accounts.map { Base58.encode(it.pubkey) },
-            encoding = encoding,
-            commitment = commitment,
-            length = length,
-            offset = offset
-        ),
-        serializer = SolanaResponseSerializer(ListSerializer(MintTokenAccountValue.serializer()))
-    ).let { result ->
-        @Suppress("UNCHECKED_CAST")
-        if (result.isSuccess && result.getOrNull() == null) Result.success(null)
-        else result as Result<List<MintTokenAccountValue>> // safe cast, null case handled above
+): Result<List<MintTokenAccountValue?>?> {
+    val values = mutableListOf<MintTokenAccountValue?>()
+    for (chunk in accounts.chunked(MAX_MULTIPLE_ACCOUNTS)) {
+        val result = router.makeRequestResultWithRepeat(
+            request = MultipleAccountsRequest(
+                accounts = chunk.map { Base58.encode(it.pubkey) },
+                encoding = encoding,
+                commitment = commitment,
+                length = length,
+                offset = offset
+            ),
+            serializer = mintAccountsSerializer
+        )
+        values += result.getOrElse { return Result.failure(it) } ?: return Result.success(null)
     }
+    return Result.success(values)
+}
+
+// A closed mint account is answered with null.
+internal val mintAccountsSerializer = SolanaResponseSerializer(ListSerializer(MintTokenAccountValue.serializer().nullable))
+
+// RPC limit of getMultipleAccounts.
+private const val MAX_MULTIPLE_ACCOUNTS = 100
 
 suspend fun <A> Api.getMultipleAccountsInfo(
     serializer: KSerializer<A>,

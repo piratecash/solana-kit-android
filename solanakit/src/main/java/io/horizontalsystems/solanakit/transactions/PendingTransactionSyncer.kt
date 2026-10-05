@@ -2,23 +2,24 @@ package io.horizontalsystems.solanakit.transactions
 
 import com.solana.api.Api
 import com.solana.api.getBlockHeight
+import com.solana.networking.postJsonRpc
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.Transaction
+import io.horizontalsystems.solanakit.network.FailoverRpcRouter
 import io.horizontalsystems.solanakit.network.SolanaNetworkErrorListener
 import io.horizontalsystems.solanakit.network.emitSafely
 import io.horizontalsystems.solanakit.network.toSolanaNetworkError
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeout
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import java.io.IOException
 import java.net.HttpURLConnection
-import java.net.URL
 import java.util.logging.Logger
 
 class PendingTransactionSyncer(
     private val rpcClient: Api,
     private val storage: TransactionStorage,
     private val transactionManager: TransactionManager,
-    private val rpcUrl: URL,
+    private val router: FailoverRpcRouter,
     private val networkErrorListener: SolanaNetworkErrorListener?
 ) {
     private val logger = Logger.getLogger("PendingTransactionSyncer")
@@ -78,46 +79,40 @@ class PendingTransactionSyncer(
         }
     }
 
-    private fun sendTransaction(encodedTransaction: String) {
+    private suspend fun sendTransaction(encodedTransaction: String) {
+        val body = "{" +
+                "\"method\": \"sendTransaction\", " +
+                "\"jsonrpc\": \"2.0\", " +
+                "\"id\": ${System.currentTimeMillis()}, " +
+                "\"params\": [" +
+                "\"$encodedTransaction\", " +
+                "{" +
+                "\"encoding\": \"base64\"," +
+                "\"skipPreflight\": false," +
+                "\"preflightCommitment\": \"confirmed\"," +
+                "\"maxRetries\": 0" +
+                "}" +
+                "]" +
+                "}"
         try {
-            val connection = rpcUrl.openConnection() as HttpURLConnection
-            connection.requestMethod = "POST"
-            connection.setRequestProperty("Content-Type", "application/json")
-            connection.doOutput = true
-            connection.outputStream.use {
-
-                val body = "{" +
-                        "\"method\": \"sendTransaction\", " +
-                        "\"jsonrpc\": \"2.0\", " +
-                        "\"id\": ${System.currentTimeMillis()}, " +
-                        "\"params\": [" +
-                        "\"$encodedTransaction\", " +
-                        "{" +
-                        "\"encoding\": \"base64\"," +
-                        "\"skipPreflight\": false," +
-                        "\"preflightCommitment\": \"confirmed\"," +
-                        "\"maxRetries\": 0" +
-                        "}" +
-                        "]" +
-                        "}"
-
-                it.write(body.toByteArray())
+            router.withDirectUrl(SEND_TRANSACTION) { url ->
+                val response = postJsonRpc(url, body)
+                if (response.status != HttpURLConnection.HTTP_OK) throw IOException("HTTP ${response.status}")
             }
-            connection.inputStream.use {
-                BufferedReader(InputStreamReader(it)).use { reader ->
-                    reader.readText()
-                }
-            }
-            connection.disconnect()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             networkErrorListener.emitSafely {
-                rpcUrl.toSolanaNetworkError(
+                router.endpoint.url.toSolanaNetworkError(
                     source = "solana-rpc-pending",
-                    method = "sendTransaction",
+                    method = SEND_TRANSACTION,
                     throwable = e
                 )
             }
         }
     }
 
+    private companion object {
+        const val SEND_TRANSACTION = "sendTransaction"
+    }
 }

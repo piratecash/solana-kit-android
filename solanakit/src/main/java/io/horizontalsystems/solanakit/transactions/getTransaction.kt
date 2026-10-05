@@ -16,14 +16,14 @@ class GetTransactionRequest(signature: String) : RpcRequest() {
     override val params = buildJsonArray {
         add(signature)
         addJsonObject {
-            put("maxSupportedTransactionVersion", 0)
+            put("maxSupportedTransactionVersion", 1)
         }
     }
 }
 
 @Serializable
 data class TransactionResult(
-    val blockTime: Long,
+    val blockTime: Long?,
     val meta: Meta?,
     val slot: Long,
     val transaction: Transaction?
