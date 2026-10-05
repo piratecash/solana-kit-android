@@ -14,7 +14,8 @@ interface IBalanceListener {
 class BalanceManager(
     private val publicKey: PublicKey,
     private val rpcClient: Api,
-    private val storage: MainStorage
+    private val storage: MainStorage,
+    initialBalance: Long?
 ) {
     var syncState: SolanaKit.SyncState =
         SolanaKit.SyncState.NotSynced(SolanaKit.SyncError.NotStarted())
@@ -27,7 +28,7 @@ class BalanceManager(
 
     var listener: IBalanceListener? = null
 
-    var balance: Long? = storage.getBalance()
+    var balance: Long? = initialBalance
         private set
 
 
@@ -48,10 +49,11 @@ class BalanceManager(
         }
     }
 
-    private fun handleBalance(balance: Long) {
+    private suspend fun handleBalance(balance: Long) {
         if (this.balance != balance) {
-            this.balance = balance
+            // persist before publishing: a cancelled save must not leave memory ahead of the database
             storage.saveBalance(balance)
+            this.balance = balance
             listener?.onUpdateBalance(balance)
         }
 

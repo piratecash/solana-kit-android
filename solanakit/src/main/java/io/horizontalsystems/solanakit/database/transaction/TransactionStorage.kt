@@ -1,6 +1,9 @@
 package io.horizontalsystems.solanakit.database.transaction
 
-import androidx.sqlite.db.SimpleSQLiteQuery
+import androidx.room.RoomRawQuery
+import androidx.room.immediateTransaction
+import androidx.room.useWriterConnection
+import io.horizontalsystems.solanakit.database.transaction.dao.TransactionsDao.TransactionKey
 import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.LastSyncedTransaction
@@ -9,7 +12,7 @@ import io.horizontalsystems.solanakit.models.TokenAccount
 import io.horizontalsystems.solanakit.models.Transaction
 
 class TransactionStorage(
-    database: TransactionDatabase,
+    private val database: TransactionDatabase,
     private val address: String
 ) {
     private val syncerStateDao = database.transactionSyncerStateDao()
@@ -17,28 +20,72 @@ class TransactionStorage(
     private val mintAccountDao = database.mintAccountDao()
     private val tokenAccountDao = database.tokenAccountsDao()
 
-    fun getSyncedBlockTime(syncerId: String): LastSyncedTransaction? =
+    suspend fun getSyncedBlockTime(syncerId: String): LastSyncedTransaction? =
         syncerStateDao.get(syncerId)
 
-    fun setSyncedBlockTime(syncBlockTime: LastSyncedTransaction) {
+    suspend fun setSyncedBlockTime(syncBlockTime: LastSyncedTransaction) {
         syncerStateDao.save(syncBlockTime)
     }
 
-    fun lastNonPendingTransaction(): Transaction? =
-        transactionsDao.lastNonPendingTransaction()
+    suspend fun syncSourceNames(prefix: String): List<String> =
+        syncerStateDao.namesWithPrefix(prefix)
 
-    fun pendingTransactions(): List<Transaction> =
+    suspend fun tokenTransferRepairCursor(): String? =
+        syncerStateDao.get(TOKEN_TRANSFER_REPAIR_SOURCE)?.hash
+
+    suspend fun saveTokenTransferRepairCursor(cursor: String) {
+        syncerStateDao.save(LastSyncedTransaction(TOKEN_TRANSFER_REPAIR_SOURCE, cursor))
+    }
+
+    /** Confirmed transactions with token transfers strictly after the given position, newest first; -1 = no limit. */
+    suspend fun tokenTransferTransactionHashes(
+        beforeTimestamp: Long?,
+        beforeHash: String?,
+        limit: Int,
+    ): List<TransactionKey> = transactionsDao.tokenTransferTransactionKeys(beforeTimestamp, beforeHash, limit)
+
+    suspend fun pendingTransactions(): List<Transaction> =
         transactionsDao.pendingTransactions()
 
-    fun updateTransactions(transactions: List<Transaction>) =
+    suspend fun updateTransactions(transactions: List<Transaction>) =
         transactionsDao.updateTransactions(transactions)
 
-    fun addTransactions(transactions: List<FullTransaction>) {
-        transactionsDao.insertTransactions(transactions.map { it.transaction })
+    suspend fun addTransactions(transactions: List<FullTransaction>) {
+        database.useWriterConnection { transactor ->
+            transactor.immediateTransaction {
+                transactionsDao.insertTransactions(transactions.map { it.transaction })
 
-        val fullTokenTransfers = transactions.map { it.tokenTransfers }.flatten()
-        transactionsDao.insertTokenTransfers(fullTokenTransfers.map { it.tokenTransfer })
-        mintAccountDao.insert(fullTokenTransfers.map { it.mintAccount }.toSet().toList())
+                val fullTokenTransfers = transactions.map { it.tokenTransfers }.flatten()
+                transactionsDao.insertTokenTransfers(fullTokenTransfers.map { it.tokenTransfer })
+                mintAccountDao.insert(fullTokenTransfers.map { it.mintAccount }.toSet().toList())
+            }
+        }
+    }
+
+    suspend fun saveExternalTransaction(transaction: Transaction) {
+        database.useWriterConnection { transactor ->
+            transactor.immediateTransaction<Unit> {
+                val existing = transactionsDao.get(transaction.hash)
+                if (existing?.external == false) return@immediateTransaction
+
+                if (existing == null) {
+                    transactionsDao.insertTransaction(transaction)
+                } else {
+                    transactionsDao.updateTransactions(
+                        listOf(transaction.copy(retryCount = existing.retryCount))
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun deleteExternalTransaction(transactionHash: String) =
+        transactionsDao.deleteExternalTransaction(transactionHash)
+
+    suspend fun deleteExternalTransactions(transactionHashes: List<String>) {
+        if (transactionHashes.isNotEmpty()) {
+            transactionsDao.deleteExternalTransactions(transactionHashes)
+        }
     }
 
     suspend fun getTransactions(
@@ -87,7 +134,7 @@ class TransactionStorage(
         fromHash: String?,
         limit: Int?
     ): List<FullTransaction> {
-        val whereConditions = mutableListOf<String>()
+        val whereConditions = mutableListOf("NOT tx.external")
         typeCondition?.let { whereConditions.add(it) }
 
         fromHash?.let { transactionsDao.get(it) }?.let { fromTransaction ->
@@ -104,13 +151,12 @@ class TransactionStorage(
             whereConditions.add(fromCondition)
         }
 
-        val whereClause =
-            if (whereConditions.isNotEmpty()) "WHERE ${whereConditions.joinToString(" AND ")}" else ""
+        val whereClause = "WHERE ${whereConditions.joinToString(" AND ")}"
         val orderClause = "ORDER BY tx.timestamp DESC, HEX(tx.hash) DESC"
-        val limitClause = limit?.let { "LIMIT $limit" } ?: ""
+        val limitClause = limit?.let { "LIMIT $it" } ?: ""
 
         val sqlQuery = """
-                      SELECT tx.*
+                      SELECT DISTINCT tx.*
                       FROM `Transaction` AS tx
                       ${if (joinTokenTransfers) "LEFT JOIN TokenTransfer AS tt ON tx.hash = tt.transactionHash" else ""}
                       $whereClause
@@ -118,51 +164,82 @@ class TransactionStorage(
                       $limitClause
                       """
 
-        return transactionsDao.getTransactions(SimpleSQLiteQuery(sqlQuery))
+        return transactionsDao.getTransactions(RoomRawQuery(sqlQuery))
             .map { it.fullTransaction }
     }
 
     suspend fun getMintAccount(address: String): MintAccount? =
         mintAccountDao.get(address)
 
+    /**
+     * Hashes among [hashes] stored as mapped history. A confirmed own send keeps its send-time
+     * placeholder data (and its signed bytes) until history remaps it.
+     */
+    suspend fun storedHashes(hashes: List<String>): Set<String> =
+        hashes.chunked(HASH_QUERY_CHUNK).flatMapTo(HashSet()) { chunk ->
+            getFullTransactions(chunk).map { it.transaction }
+                .filter { !it.pending && it.base64Encoded.isEmpty() }
+                .map { it.hash }
+        }
+
     suspend fun getFullTransactions(hashes: List<String>): List<FullTransaction> {
+        if (hashes.isEmpty()) return emptyList()
+
         val sqlQuery = """
                       SELECT tx.*
                       FROM `Transaction` AS tx
-                      LEFT JOIN TokenTransfer AS tt ON tx.hash = tt.transactionHash
-                      WHERE tx.hash IN (${hashes.joinToString(", ", "'", "'")})
+                      WHERE tx.hash IN (${hashes.joinToString(", ") { "'$it'" }})
+                      AND NOT tx.external
                       """
 
-        return transactionsDao.getTransactions(SimpleSQLiteQuery(sqlQuery))
+        return transactionsDao.getTransactions(RoomRawQuery(sqlQuery))
             .map { it.fullTransaction }
     }
 
-    fun saveTokenAccounts(tokenAccounts: List<TokenAccount>) {
+    suspend fun saveTokenAccounts(tokenAccounts: List<TokenAccount>) {
         tokenAccountDao.insert(tokenAccounts)
     }
 
-    fun saveMintAccounts(mintAccounts: List<MintAccount>) {
-        mintAccountDao.insert(mintAccounts)
+    suspend fun saveTokenAccounts(
+        tokenAccounts: List<TokenAccount>,
+        mintAccounts: List<MintAccount>
+    ) {
+        database.useWriterConnection { transactor ->
+            transactor.immediateTransaction {
+                tokenAccountDao.insert(tokenAccounts)
+                mintAccountDao.insert(mintAccounts)
+            }
+        }
     }
 
-    fun getTokenAccounts(mintAddresses: List<String>? = null): List<TokenAccount> =
+    suspend fun getTokenAccounts(mintAddresses: List<String>? = null): List<TokenAccount> =
         if (mintAddresses == null) tokenAccountDao.getAll()
         else tokenAccountDao.get(mintAddresses)
 
-    fun getFullTokenAccount(mintAddress: String): FullTokenAccount? =
+    suspend fun getFullTokenAccount(mintAddress: String): FullTokenAccount? =
         tokenAccountDao.get(mintAddress)?.fullTokenAccount
 
-    fun getFullTokenAccounts(): List<FullTokenAccount> =
+    suspend fun getFullTokenAccounts(): List<FullTokenAccount> =
         tokenAccountDao.getAllFullAccounts().map { it.fullTokenAccount }
 
-    fun tokenAccountExists(mintAddress: String): Boolean =
-        tokenAccountDao.getByMintAddress(mintAddress) != null
+    suspend fun addTokenAccountIfMissing(tokenAccount: TokenAccount, mintAccount: MintAccount) {
+        database.useWriterConnection { transactor ->
+            transactor.immediateTransaction {
+                if (tokenAccountDao.getByMintAddress(tokenAccount.mintAddress) != null) {
+                    return@immediateTransaction
+                }
 
-    fun addTokenAccount(tokenAccount: TokenAccount) {
-        tokenAccountDao.insert(tokenAccount)
+                tokenAccountDao.insert(tokenAccount)
+                mintAccountDao.insert(mintAccount)
+            }
+        }
     }
 
-    fun addMintAccount(mintAccount: MintAccount) {
-        mintAccountDao.insert(mintAccount)
+    private companion object {
+        // Stored as a key-value row in LastSyncedTransaction, so no schema change is needed.
+        const val TOKEN_TRANSFER_REPAIR_SOURCE = "token-transfer-repair-v1"
+
+        // Keeps the inlined IN list far below SQLite's statement length limit.
+        const val HASH_QUERY_CHUNK = 500
     }
 }
