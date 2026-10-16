@@ -306,6 +306,7 @@ class TransactionManager(
 
         val signedTransaction = rpcAction.signSPLTokens(
             mintAddress = mintAddress.publicKey,
+            decimals = fullTokenAccount.mintAccount.decimals,
             fromPublicKey = PublicKey(tokenAccount.address),
             destinationAddress = toAddress.publicKey,
             amount = amount,

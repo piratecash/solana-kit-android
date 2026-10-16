@@ -186,6 +186,7 @@ internal fun Action.signSOL(
 
 internal fun Action.signSPLTokens(
     mintAddress: PublicKey,
+    decimals: Int,
     fromPublicKey: PublicKey,
     destinationAddress: PublicKey,
     amount: Long,
@@ -206,24 +207,17 @@ internal fun Action.signSPLTokens(
         if (Base58.encode(fromPublicKey.pubkey) == Base58.encode(toPublicKey.pubkey)) {
             return@flatMap ContResult.failure(ResultError("Same send and destination address."))
         }
-        val transaction = Transaction()
-
-        if (instructions.isNotEmpty()) {
-            transaction.add(*instructions.toTypedArray())
-        }
-
-        if (unregisteredAssociatedToken) {
-            val createATokenInstruction =
-                AssociatedTokenProgram.createAssociatedTokenAccountInstruction(
-                    mint = mintAddress,
-                    associatedAccount = toPublicKey,
-                    owner = destinationAddress,
-                    payer = account.publicKey
-                )
-            transaction.add(createATokenInstruction)
-        }
-
-        transaction.add(TokenProgram.transfer(fromPublicKey, toPublicKey, amount, account.publicKey))
+        val transaction = splTransferTransaction(
+            mintAddress = mintAddress,
+            decimals = decimals,
+            source = fromPublicKey,
+            destination = toPublicKey,
+            destinationOwner = destinationAddress,
+            createDestination = unregisteredAssociatedToken,
+            amount = amount,
+            owner = account.publicKey,
+            instructions = instructions,
+        )
         return@flatMap ContResult.success(transaction)
     }.run { result ->
         result.onSuccess { transaction ->
@@ -236,6 +230,34 @@ internal fun Action.signSPLTokens(
             emitter.onError(it)
         }
     }
+}
+
+internal fun splTransferTransaction(
+    mintAddress: PublicKey,
+    decimals: Int,
+    source: PublicKey,
+    destination: PublicKey,
+    destinationOwner: PublicKey,
+    createDestination: Boolean,
+    amount: Long,
+    owner: PublicKey,
+    instructions: List<TransactionInstruction>,
+): Transaction = Transaction().apply {
+    if (instructions.isNotEmpty()) {
+        add(*instructions.toTypedArray())
+    }
+    if (createDestination) {
+        add(
+            AssociatedTokenProgram.createAssociatedTokenAccountInstruction(
+                mint = mintAddress,
+                associatedAccount = destination,
+                owner = destinationOwner,
+                payer = owner
+            )
+        )
+    }
+    // Ledger's Solana app never parses the deprecated Transfer, so only TransferChecked signs in clear.
+    add(TokenProgram.transferChecked(source, destination, amount, decimals.toByte(), owner, mintAddress))
 }
 
 internal suspend fun Api.sendRawTransactionWithoutRetries(transaction: ByteArray): Result<String> {
