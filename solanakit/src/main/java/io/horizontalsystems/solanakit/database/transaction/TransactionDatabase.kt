@@ -1,15 +1,32 @@
 package io.horizontalsystems.solanakit.database.transaction
 
-import android.content.Context
 import androidx.room.Database
-import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.SQLiteConnection
+import androidx.sqlite.execSQL
+import io.horizontalsystems.solanakit.PlatformContext
+import io.horizontalsystems.solanakit.database.requireValidDatabaseKey
+import io.horizontalsystems.solanakit.database.requireValidDatabaseName
+import io.horizontalsystems.solanakit.database.transactionDatabaseBuilder
 import io.horizontalsystems.solanakit.database.transaction.dao.MintAccountDao
 import io.horizontalsystems.solanakit.database.transaction.dao.TokenAccountDao
 import io.horizontalsystems.solanakit.database.transaction.dao.TransactionSyncerStateDao
 import io.horizontalsystems.solanakit.database.transaction.dao.TransactionsDao
 import io.horizontalsystems.solanakit.models.*
+
+internal val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(connection: SQLiteConnection) {
+        connection.execSQL("ALTER TABLE `Transaction` ADD COLUMN `external` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/** Schema handling shared by production and tests: pre-10 databases are dropped, downgrades are kept. */
+internal fun RoomDatabase.Builder<TransactionDatabase>.transactionSchemaPolicy(): RoomDatabase.Builder<TransactionDatabase> =
+    addMigrations(MIGRATION_10_11)
+        .fallbackToDestructiveMigrationFrom(dropAllTables = true, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+        .fallbackToDestructiveMigrationOnDowngrade(dropAllTables = false)
 
 @Database(
     entities = [
@@ -19,8 +36,8 @@ import io.horizontalsystems.solanakit.models.*
         Transaction::class,
         TokenAccount::class
     ],
-    version = 10,
-    exportSchema = false
+    version = 11,
+    exportSchema = true
 )
 @TypeConverters(RoomTypeConverters::class)
 abstract class TransactionDatabase : RoomDatabase() {
@@ -32,13 +49,16 @@ abstract class TransactionDatabase : RoomDatabase() {
 
     companion object {
 
-        fun getInstance(context: Context, databaseName: String): TransactionDatabase {
-            return Room.databaseBuilder(context, TransactionDatabase::class.java, databaseName)
-//                .setQueryCallback({ sqlQuery, bindArgs ->
-//                    println("SQL Query: $sqlQuery SQL Args: $bindArgs")
-//                }, Executors.newSingleThreadExecutor())
-                .fallbackToDestructiveMigration()
-                .allowMainThreadQueries()
+        /** Same database contract as [io.horizontalsystems.solanakit.database.main.MainDatabase.getInstance]. */
+        fun getInstance(
+            context: PlatformContext,
+            databaseName: String,
+            databaseKey: ByteArray,
+        ): TransactionDatabase {
+            requireValidDatabaseName(databaseName)
+            requireValidDatabaseKey(databaseKey)
+            return transactionDatabaseBuilder(context, databaseName, databaseKey)
+                .transactionSchemaPolicy()
                 .build()
         }
 
