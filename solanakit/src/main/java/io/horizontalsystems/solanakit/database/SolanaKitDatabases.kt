@@ -1,11 +1,15 @@
 package io.horizontalsystems.solanakit.database
 
+import io.horizontalsystems.databasenaming.DatabaseNameResolver
 import io.horizontalsystems.solanakit.PlatformContext
 import io.horizontalsystems.sqlcipher.room.DatabaseMigrationResult
 import io.horizontalsystems.sqlcipher.room.SqlCipherDatabases
 
-// The namespace names the on-disk manifest and lock files (`.solana-kit-sqlcipher*`); it must never change.
-internal val solanaKitDatabases = SqlCipherDatabases("solana-kit")
+// The namespace names the on-disk manifest and lock files (`.solana-kit-sqlcipher*`); the default must never change.
+private const val NAMESPACE = "solana-kit"
+
+internal fun solanaKitDatabases(nameResolver: DatabaseNameResolver = DatabaseNameResolver.Identity) =
+    SqlCipherDatabases(nameResolver.resolve(NAMESPACE))
 
 internal fun mainDatabaseName(walletId: String) = "Solana-$walletId-main"
 
@@ -21,22 +25,27 @@ internal suspend fun migrateDatabaseGroup(
     context: PlatformContext,
     walletId: String,
     databaseKey: ByteArray,
+    nameResolver: DatabaseNameResolver = DatabaseNameResolver.Identity,
 ): DatabaseMigrationResult {
     requireValidDatabaseGroup(walletId, databaseKey)
-    return solanaKitDatabases.migrateDatabases(
+    return solanaKitDatabases(nameResolver).migrateDatabases(
         dataDir = dataDirectoryPath(context, walletId),
-        databaseNames = databaseNames(walletId),
-        migrationId = migrationId(walletId),
+        databaseNames = resolvedDatabaseNames(walletId, nameResolver),
+        migrationId = nameResolver.resolve(migrationId(walletId)),
         databaseKey = databaseKey,
     )
 }
 
-internal fun clearDatabaseGroup(context: PlatformContext, walletId: String) {
+internal fun clearDatabaseGroup(
+    context: PlatformContext,
+    walletId: String,
+    nameResolver: DatabaseNameResolver = DatabaseNameResolver.Identity,
+) {
     requireValidWalletId(walletId)
-    solanaKitDatabases.clearDatabases(
+    solanaKitDatabases(nameResolver).clearDatabases(
         dataDir = dataDirectoryPath(context, walletId),
-        databaseNames = databaseNames(walletId),
-        migrationId = migrationId(walletId),
+        databaseNames = resolvedDatabaseNames(walletId, nameResolver),
+        migrationId = nameResolver.resolve(migrationId(walletId)),
     )
 }
 
@@ -50,12 +59,24 @@ internal fun requireValidDatabaseKey(databaseKey: ByteArray) {
     require(databaseKey.size == DATABASE_KEY_SIZE) { "Database key must contain exactly $DATABASE_KEY_SIZE bytes" }
 }
 
-internal fun requireValidDatabaseName(name: String) {
+/** The file [nameResolver] maps a default database name to, checked before any I/O. */
+internal fun resolvedDatabaseName(defaultName: String, nameResolver: DatabaseNameResolver): String {
+    val namespace = nameResolver.resolve(NAMESPACE)
+    requireValidDatabaseName(namespace)
+    return nameResolver.resolve(defaultName).also { requireValidDatabaseName(it, ".$namespace-sqlcipher") }
+}
+
+private fun resolvedDatabaseNames(walletId: String, nameResolver: DatabaseNameResolver) =
+    databaseNames(walletId).map { resolvedDatabaseName(it, nameResolver) }
+
+internal fun requireValidDatabaseName(name: String, extraReservedPrefix: String? = null) {
     require(name.isNotBlank()) { "Database name must not be blank" }
     require(name.none { character -> character == '/' || character == '\\' }) {
         "Database name must not contain a path separator: $name"
     }
-    require(RESERVED_PREFIXES.none(name::startsWith)) { "Database name uses a reserved migration prefix: $name" }
+    require((RESERVED_PREFIXES + listOfNotNull(extraReservedPrefix)).none(name::startsWith)) {
+        "Database name uses a reserved migration prefix: $name"
+    }
     require(RESERVED_SUFFIXES.none(name::endsWith)) { "Database name uses a reserved migration suffix: $name" }
 }
 

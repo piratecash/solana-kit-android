@@ -6,9 +6,10 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
+import io.horizontalsystems.databasenaming.DatabaseNameResolver
 import io.horizontalsystems.solanakit.PlatformContext
 import io.horizontalsystems.solanakit.database.requireValidDatabaseKey
-import io.horizontalsystems.solanakit.database.requireValidDatabaseName
+import io.horizontalsystems.solanakit.database.resolvedDatabaseName
 import io.horizontalsystems.solanakit.database.transactionDatabaseBuilder
 import io.horizontalsystems.solanakit.database.transaction.dao.MintAccountDao
 import io.horizontalsystems.solanakit.database.transaction.dao.TokenAccountDao
@@ -54,10 +55,11 @@ abstract class TransactionDatabase : RoomDatabase() {
             context: PlatformContext,
             databaseName: String,
             databaseKey: ByteArray,
+            nameResolver: DatabaseNameResolver = DatabaseNameResolver.Identity,
         ): TransactionDatabase {
-            requireValidDatabaseName(databaseName)
+            val resolvedName = resolvedDatabaseName(databaseName, nameResolver)
             requireValidDatabaseKey(databaseKey)
-            return transactionDatabaseBuilder(context, databaseName, databaseKey)
+            return transactionDatabaseBuilder(context, resolvedName, databaseKey, nameResolver)
                 .transactionSchemaPolicy()
                 .build()
         }

@@ -13,6 +13,8 @@ okhttp-logging-interceptor = "5.1.0"
 jetbrainsKotlinJvm = "2.3.20"
 solanakt = "v1.0.0-pcash.5"
 piratecashBitcoin = "v0.1.0-pcash.36"
+# The naming contract is a plain jar published with bitcoin-kit; sqlcipher stays on piratecashBitcoin.
+databaseNaming = "v0.1.0-pcash.47"
 sqlite = "2.6.2"
 mockwebserver = "5.1.0"
 junit = "4.13.2"
@@ -49,6 +51,7 @@ sol4k = { module = "org.sol4k:sol4k", version.ref = "sol4k" }
 okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp-logging-interceptor" }
 mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "mockwebserver" }
 solanakt = { module = "com.github.piratecash:SolanaKT", version.ref = "solanakt" }
+database-naming = { module = "com.github.piratecash.bitcoin-kit-android:database-naming", version.ref = "databaseNaming" }
 sqlcipher-room = { module = "com.github.piratecash.bitcoin-kit-android:sqlcipher-room", version.ref = "piratecashBitcoin" }
 sqlcipher-driver = { module = "com.github.piratecash.bitcoin-kit-android:sqlcipher-driver", version.ref = "piratecashBitcoin" }
 sqlite-bundled = { group = "androidx.sqlite", name = "sqlite-bundled", version.ref = "sqlite" }

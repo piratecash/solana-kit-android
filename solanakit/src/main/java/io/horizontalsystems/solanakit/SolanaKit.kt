@@ -4,6 +4,7 @@ import co.touchlab.kermit.Logger
 import com.solana.actions.Action
 import com.solana.api.Api
 import com.solana.networking.Network
+import io.horizontalsystems.databasenaming.DatabaseNameResolver
 import io.horizontalsystems.solanakit.core.BalanceManager
 import io.horizontalsystems.solanakit.core.ISyncListener
 import io.horizontalsystems.solanakit.core.SolanaDatabaseManager
@@ -355,7 +356,8 @@ class SolanaKit(
             walletId: String,
             databaseKey: ByteArray,
             rpcApiKeys: List<String> = emptyList(),
-            networkErrorListener: SolanaNetworkErrorListener? = null
+            networkErrorListener: SolanaNetworkErrorListener? = null,
+            nameResolver: DatabaseNameResolver = DatabaseNameResolver.Identity,
         ): SolanaKit {
             requireValidDatabaseGroup(walletId, databaseKey)
 
@@ -366,13 +368,13 @@ class SolanaKit(
                 pacer = PublicPacer(TimeSource.Monotonic),
                 networkErrorListener = networkErrorListener,
             )
-            val mainDatabase = SolanaDatabaseManager.getMainDatabase(context, walletId, databaseKey)
+            val mainDatabase = SolanaDatabaseManager.getMainDatabase(context, walletId, databaseKey, nameResolver)
             val mainStorage = MainStorage(mainDatabase)
             val lastBlockHeight = mainStorage.getLastBlockHeight()
             val balance = mainStorage.getBalance()
 
             val transactionDatabase =
-                SolanaDatabaseManager.getTransactionDatabase(context, walletId, databaseKey)
+                SolanaDatabaseManager.getTransactionDatabase(context, walletId, databaseKey, nameResolver)
             val transactionStorage = TransactionStorage(transactionDatabase, addressString)
 
             val rpcApiClient = Api(router)
@@ -469,7 +471,8 @@ class SolanaKit(
             context: PlatformContext,
             walletId: String,
             databaseKey: ByteArray,
-        ): DatabaseMigrationResult = migrateDatabaseGroup(context, walletId, databaseKey)
+            nameResolver: DatabaseNameResolver = DatabaseNameResolver.Identity,
+        ): DatabaseMigrationResult = migrateDatabaseGroup(context, walletId, databaseKey, nameResolver)
 
         /**
          * Deletes both database files of [walletId] together with any leftovers of an interrupted
@@ -477,8 +480,12 @@ class SolanaKit(
          * separator, and [DatabaseMigrationConflictException] while another migration or clear runs in the
          * same directory; retry later. Stop the kit first.
          */
-        fun clear(context: PlatformContext, walletId: String) {
-            clearDatabaseGroup(context, walletId)
+        fun clear(
+            context: PlatformContext,
+            walletId: String,
+            nameResolver: DatabaseNameResolver = DatabaseNameResolver.Identity,
+        ) {
+            clearDatabaseGroup(context, walletId, nameResolver)
         }
     }
 

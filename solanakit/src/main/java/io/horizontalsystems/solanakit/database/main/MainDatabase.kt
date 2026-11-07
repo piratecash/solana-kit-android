@@ -3,10 +3,11 @@ package io.horizontalsystems.solanakit.database.main
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import io.horizontalsystems.databasenaming.DatabaseNameResolver
 import io.horizontalsystems.solanakit.PlatformContext
 import io.horizontalsystems.solanakit.database.mainDatabaseBuilder
 import io.horizontalsystems.solanakit.database.requireValidDatabaseKey
-import io.horizontalsystems.solanakit.database.requireValidDatabaseName
+import io.horizontalsystems.solanakit.database.resolvedDatabaseName
 import io.horizontalsystems.solanakit.database.main.dao.BalanceDao
 import io.horizontalsystems.solanakit.database.main.dao.InitialSyncDao
 import io.horizontalsystems.solanakit.database.main.dao.LastBlockHeightDao
@@ -46,10 +47,15 @@ abstract class MainDatabase : RoomDatabase() {
          * - `DatabaseKeyMismatchException`: the file is kept; only `SolanaKit.clear` plus a new key recovers,
          *   losing the stored data.
          */
-        fun getInstance(context: PlatformContext, databaseName: String, databaseKey: ByteArray): MainDatabase {
-            requireValidDatabaseName(databaseName)
+        fun getInstance(
+            context: PlatformContext,
+            databaseName: String,
+            databaseKey: ByteArray,
+            nameResolver: DatabaseNameResolver = DatabaseNameResolver.Identity,
+        ): MainDatabase {
+            val resolvedName = resolvedDatabaseName(databaseName, nameResolver)
             requireValidDatabaseKey(databaseKey)
-            return mainDatabaseBuilder(context, databaseName, databaseKey)
+            return mainDatabaseBuilder(context, resolvedName, databaseKey, nameResolver)
                 .mainSchemaPolicy()
                 .build()
         }

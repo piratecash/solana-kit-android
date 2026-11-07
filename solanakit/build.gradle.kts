@@ -61,6 +61,7 @@ kotlin {
                 implementation(libs.kotlinx.coroutines.android)
                 // Public API exposes its exceptions and DatabaseMigrationResult.
                 api(libs.sqlcipher.room)
+                api(libs.database.naming)
             }
         }
         val desktopMain by getting {
@@ -68,6 +69,7 @@ kotlin {
             dependsOn(jvmCommonMain)
             dependencies {
                 api(libs.sqlcipher.room)
+                api(libs.database.naming)
             }
         }
 
