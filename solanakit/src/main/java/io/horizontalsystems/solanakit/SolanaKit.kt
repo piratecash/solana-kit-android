@@ -236,24 +236,39 @@ class SolanaKit(
     suspend fun getAllTransactions(
         incoming: Boolean? = null,
         fromHash: String? = null,
-        limit: Int? = null
+        limit: Int? = null,
+        sinceTimestamp: Long? = null,
+        untilTimestamp: Long? = null
     ): List<FullTransaction> =
-        transactionManager.getAllTransaction(incoming, fromHash, limit)
+        transactionManager.getAllTransaction(incoming, fromHash, limit, sinceTimestamp, untilTimestamp)
 
     suspend fun getSolTransactions(
         incoming: Boolean? = null,
         fromHash: String? = null,
-        limit: Int? = null
+        limit: Int? = null,
+        sinceTimestamp: Long? = null,
+        untilTimestamp: Long? = null
     ): List<FullTransaction> =
-        transactionManager.getSolTransaction(incoming, fromHash, limit)
+        transactionManager.getSolTransaction(incoming, fromHash, limit, sinceTimestamp, untilTimestamp)
 
     suspend fun getSplTransactions(
         mintAddress: String,
         incoming: Boolean? = null,
         fromHash: String? = null,
-        limit: Int? = null
+        limit: Int? = null,
+        sinceTimestamp: Long? = null,
+        untilTimestamp: Long? = null
     ): List<FullTransaction> =
-        transactionManager.getSplTransaction(mintAddress, incoming, fromHash, limit)
+        transactionManager.getSplTransaction(mintAddress, incoming, fromHash, limit, sinceTimestamp, untilTimestamp)
+
+    suspend fun oldestTransactionTimestamp(incoming: Boolean? = null): Long? =
+        transactionManager.oldestTimestamp(incoming)
+
+    suspend fun oldestSolTransactionTimestamp(incoming: Boolean? = null): Long? =
+        transactionManager.oldestSolTimestamp(incoming)
+
+    suspend fun oldestSplTransactionTimestamp(mintAddress: String, incoming: Boolean? = null): Long? =
+        transactionManager.oldestSplTimestamp(mintAddress, incoming)
 
     suspend fun signedSolTransaction(
         toAddress: Address,

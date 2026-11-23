@@ -77,24 +77,39 @@ class TransactionManager(
     suspend fun getAllTransaction(
         incoming: Boolean?,
         fromHash: String?,
-        limit: Int?
+        limit: Int?,
+        sinceTimestamp: Long?,
+        untilTimestamp: Long?
     ): List<FullTransaction> =
-        storage.getTransactions(incoming, fromHash, limit)
+        storage.getTransactions(incoming, fromHash, limit, sinceTimestamp, untilTimestamp)
 
     suspend fun getSolTransaction(
         incoming: Boolean?,
         fromHash: String?,
-        limit: Int?
+        limit: Int?,
+        sinceTimestamp: Long?,
+        untilTimestamp: Long?
     ): List<FullTransaction> =
-        storage.getSolTransactions(incoming, fromHash, limit)
+        storage.getSolTransactions(incoming, fromHash, limit, sinceTimestamp, untilTimestamp)
 
     suspend fun getSplTransaction(
         mintAddress: String,
         incoming: Boolean?,
         fromHash: String?,
-        limit: Int?
+        limit: Int?,
+        sinceTimestamp: Long?,
+        untilTimestamp: Long?
     ): List<FullTransaction> =
-        storage.getSplTransactions(mintAddress, incoming, fromHash, limit)
+        storage.getSplTransactions(mintAddress, incoming, fromHash, limit, sinceTimestamp, untilTimestamp)
+
+    suspend fun oldestTimestamp(incoming: Boolean?): Long? =
+        storage.oldestTimestamp(incoming)
+
+    suspend fun oldestSolTimestamp(incoming: Boolean?): Long? =
+        storage.oldestSolTimestamp(incoming)
+
+    suspend fun oldestSplTimestamp(mintAddress: String, incoming: Boolean?): Long? =
+        storage.oldestSplTimestamp(mintAddress, incoming)
 
     suspend fun handle(syncedTransactions: List<FullTransaction>, replaceTokenTransfersOf: Set<String> = emptySet()) =
         notifyTransactionsUpdate(store(syncedTransactions, replaceTokenTransfersOf))

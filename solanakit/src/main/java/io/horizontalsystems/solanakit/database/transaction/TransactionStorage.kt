@@ -91,51 +91,94 @@ class TransactionStorage(
     suspend fun getTransactions(
         incoming: Boolean?,
         fromHash: String?,
-        limit: Int?
-    ): List<FullTransaction> {
-        val condition = incoming?.let {
-            if (incoming) "((tx.amount IS NOT NULL AND tx.`to` = '$address') OR tt.incoming)"
-            else "((tx.amount IS NOT NULL AND tx.`from` = '$address') OR NOT(tt.incoming))"
-        }
-
-        return getTransactions(condition, incoming != null, fromHash, limit)
-    }
+        limit: Int?,
+        sinceTimestamp: Long? = null,
+        untilTimestamp: Long? = null
+    ): List<FullTransaction> =
+        getTransactions(allFilter(incoming), fromHash, limit, sinceTimestamp, untilTimestamp)
 
     suspend fun getSolTransactions(
         incoming: Boolean?,
         fromHash: String?,
-        limit: Int?
-    ): List<FullTransaction> {
-        val condition = incoming?.let {
-            if (incoming) "(tx.amount IS NOT NULL AND tx.`to` = '$address')"
-            else "(tx.amount IS NOT NULL AND tx.`from` = '$address')"
-        } ?: "tx.amount IS NOT NULL"
-
-        return getTransactions(condition, false, fromHash, limit)
-    }
+        limit: Int?,
+        sinceTimestamp: Long? = null,
+        untilTimestamp: Long? = null
+    ): List<FullTransaction> =
+        getTransactions(solFilter(incoming), fromHash, limit, sinceTimestamp, untilTimestamp)
 
     suspend fun getSplTransactions(
         mintAddress: String,
         incoming: Boolean?,
         fromHash: String?,
-        limit: Int?
-    ): List<FullTransaction> {
+        limit: Int?,
+        sinceTimestamp: Long? = null,
+        untilTimestamp: Long? = null
+    ): List<FullTransaction> =
+        getTransactions(splFilter(mintAddress, incoming), fromHash, limit, sinceTimestamp, untilTimestamp)
+
+    suspend fun oldestTimestamp(incoming: Boolean?): Long? =
+        oldestTimestamp(allFilter(incoming))
+
+    suspend fun oldestSolTimestamp(incoming: Boolean?): Long? =
+        oldestTimestamp(solFilter(incoming))
+
+    suspend fun oldestSplTimestamp(mintAddress: String, incoming: Boolean?): Long? =
+        oldestTimestamp(splFilter(mintAddress, incoming))
+
+    private class HistoryFilter(val typeCondition: String?, val joinTokenTransfers: Boolean)
+
+    private fun allFilter(incoming: Boolean?): HistoryFilter {
+        val condition = incoming?.let {
+            if (incoming) "((tx.amount IS NOT NULL AND tx.`to` = '$address') OR tt.incoming)"
+            else "((tx.amount IS NOT NULL AND tx.`from` = '$address') OR NOT(tt.incoming))"
+        }
+
+        return HistoryFilter(condition, incoming != null)
+    }
+
+    private fun solFilter(incoming: Boolean?): HistoryFilter {
+        val condition = incoming?.let {
+            if (incoming) "(tx.amount IS NOT NULL AND tx.`to` = '$address')"
+            else "(tx.amount IS NOT NULL AND tx.`from` = '$address')"
+        } ?: "tx.amount IS NOT NULL"
+
+        return HistoryFilter(condition, false)
+    }
+
+    private fun splFilter(mintAddress: String, incoming: Boolean?): HistoryFilter {
         val condition = incoming?.let {
             val incomingCondition = if (incoming) "tt.incoming" else "NOT(tt.incoming)"
             "(tt.mintAddress = '$mintAddress' AND $incomingCondition)"
         } ?: "tt.mintAddress = '$mintAddress'"
 
-        return getTransactions(condition, true, fromHash, limit)
+        return HistoryFilter(condition, true)
+    }
+
+    private fun fromClause(filter: HistoryFilter, whereConditions: List<String>) = """
+        FROM `Transaction` AS tx
+        ${if (filter.joinTokenTransfers) "LEFT JOIN TokenTransfer AS tt ON tx.hash = tt.transactionHash" else ""}
+        WHERE ${whereConditions.joinToString(" AND ")}
+        """
+
+    private suspend fun oldestTimestamp(filter: HistoryFilter): Long? {
+        val whereConditions = listOfNotNull("NOT tx.external", DATED_CONDITION, filter.typeCondition)
+
+        return transactionsDao.oldestTimestamp(
+            RoomRawQuery("SELECT MIN(tx.timestamp) ${fromClause(filter, whereConditions)}")
+        )
     }
 
     private suspend fun getTransactions(
-        typeCondition: String?,
-        joinTokenTransfers: Boolean,
+        filter: HistoryFilter,
         fromHash: String?,
-        limit: Int?
+        limit: Int?,
+        sinceTimestamp: Long?,
+        untilTimestamp: Long?
     ): List<FullTransaction> {
-        val whereConditions = mutableListOf("NOT tx.external")
-        typeCondition?.let { whereConditions.add(it) }
+        val whereConditions = listOfNotNull("NOT tx.external", filter.typeCondition).toMutableList()
+        if (sinceTimestamp != null || untilTimestamp != null) whereConditions.add(DATED_CONDITION)
+        sinceTimestamp?.let { whereConditions.add("tx.timestamp >= $it") }
+        untilTimestamp?.let { whereConditions.add("tx.timestamp < $it") }
 
         fromHash?.let { transactionsDao.get(it) }?.let { fromTransaction ->
             val fromCondition = """
@@ -151,15 +194,12 @@ class TransactionStorage(
             whereConditions.add(fromCondition)
         }
 
-        val whereClause = "WHERE ${whereConditions.joinToString(" AND ")}"
         val orderClause = "ORDER BY tx.timestamp DESC, HEX(tx.hash) DESC"
         val limitClause = limit?.let { "LIMIT $it" } ?: ""
 
         val sqlQuery = """
                       SELECT DISTINCT tx.*
-                      FROM `Transaction` AS tx
-                      ${if (joinTokenTransfers) "LEFT JOIN TokenTransfer AS tt ON tx.hash = tt.transactionHash" else ""}
-                      $whereClause
+                      ${fromClause(filter, whereConditions)}
                       $orderClause
                       $limitClause
                       """
@@ -241,5 +281,8 @@ class TransactionStorage(
 
         // Keeps the inlined IN list far below SQLite's statement length limit.
         const val HASH_QUERY_CHUNK = 500
+
+        // Rows without a block time are stored with timestamp 0 and belong to no period.
+        const val DATED_CONDITION = "tx.timestamp > 0"
     }
 }

@@ -34,6 +34,9 @@ interface TransactionsDao {
     @RawQuery
     suspend fun getTransactions(query: RoomRawQuery): List<FullTransactionWrapper>
 
+    @RawQuery
+    suspend fun oldestTimestamp(query: RoomRawQuery): Long?
+
     @Query(
         """
         SELECT timestamp, hash FROM `Transaction`
