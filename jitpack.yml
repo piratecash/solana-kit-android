@@ -1,0 +1,7 @@
+jdk:
+  - openjdk21
+before_install:
+  - touch local.properties
+install:
+  - ./gradlew test
+  - ./gradlew publishToMavenLocal

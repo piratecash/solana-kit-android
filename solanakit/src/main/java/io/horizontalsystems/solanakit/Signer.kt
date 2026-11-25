@@ -5,6 +5,7 @@ import com.solana.core.HotAccount
 import com.solana.vendor.TweetNaclFast
 import com.solana.vendor.bip32.wallet.DerivableType
 import com.solana.vendor.bip32.wallet.SolanaBip44
+import org.sol4k.Base58
 
 class Signer(internal val account: Account) {
 
@@ -18,7 +19,7 @@ class Signer(internal val account: Account) {
 
         fun address(seed: ByteArray): String {
             val account = account(privateKey(seed))
-            return account.publicKey.toBase58()
+            return Base58.encode(account.publicKey.pubkey)
         }
 
         fun privateKey(seed: ByteArray): ByteArray {

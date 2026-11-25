@@ -1,5 +1,6 @@
 package io.horizontalsystems.solanakit.models
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import java.math.BigDecimal
@@ -18,5 +19,7 @@ data class Transaction(
     val blockHash: String = "",
     val lastValidBlockHeight: Long = 0,
     val base64Encoded: String = "",
-    val retryCount: Int = 0
+    val retryCount: Int = 0,
+    @ColumnInfo(defaultValue = "0")
+    val external: Boolean = false,
 )

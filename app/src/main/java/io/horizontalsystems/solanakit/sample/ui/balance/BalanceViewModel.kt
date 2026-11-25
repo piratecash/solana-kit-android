@@ -3,10 +3,9 @@ package io.horizontalsystems.solanakit.sample.ui.balance
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import io.horizontalsystems.solanakit.models.Address
+import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.sample.App
 import kotlinx.coroutines.launch
-import java.math.BigDecimal
 
 class BalanceViewModel : ViewModel() {
 
@@ -17,57 +16,62 @@ class BalanceViewModel : ViewModel() {
     val transactionsSyncState = MutableLiveData<String>().apply { value = "" }
     val lastBlockHeight = MutableLiveData<String>().apply { value = "" }
 
+    private var kit: SolanaKit? = null
+
     init {
-        val kit = App.instance.solanaKit
-
         viewModelScope.launch {
-            kit.balanceFlow.collect {
-                balance.postValue("Balance: $it")
-            }
-        }
+            val kit = App.instance.awaitSolanaKit()
+            this@BalanceViewModel.kit = kit
 
-        viewModelScope.launch {
-            kit.balanceSyncStateFlow.collect {
-                balanceSyncState.postValue("BalanceState: $it")
+            launch {
+                kit.balanceFlow.collect {
+                    balance.postValue("Balance: $it")
+                }
             }
-        }
 
-        viewModelScope.launch {
-            kit.tokenBalanceSyncStateFlow.collect {
-                tokenBalanceSyncState.postValue("TokenBalanceState: $it")
+            launch {
+                kit.balanceSyncStateFlow.collect {
+                    balanceSyncState.postValue("BalanceState: $it")
+                }
             }
-        }
 
-        viewModelScope.launch {
-            kit.transactionsSyncStateFlow.collect {
-                transactionsSyncState.postValue("TxSyncState: $it")
+            launch {
+                kit.tokenBalanceSyncStateFlow.collect {
+                    tokenBalanceSyncState.postValue("TokenBalanceState: $it")
+                }
             }
-        }
 
-        viewModelScope.launch {
-            kit.lastBlockHeightFlow.collect {
-                lastBlockHeight.postValue("LastBlockHeight: $it")
+            launch {
+                kit.transactionsSyncStateFlow.collect {
+                    transactionsSyncState.postValue("TxSyncState: $it")
+                }
             }
-        }
 
-        balance.postValue("Balance: ${kit.balance}")
-        receiveAddress.postValue("Address: ${kit.receiveAddress}")
-        balanceSyncState.postValue("SyncState: ${kit.syncState}")
-        tokenBalanceSyncState.postValue("TokenSyncState: ${kit.tokenBalanceSyncState}")
-        transactionsSyncState.postValue("TxSyncState: ${kit.transactionsSyncState}")
-        lastBlockHeight.postValue("LastBlockHeight: ${kit.lastBlockHeight}")
+            launch {
+                kit.lastBlockHeightFlow.collect {
+                    lastBlockHeight.postValue("LastBlockHeight: $it")
+                }
+            }
+
+            balance.postValue("Balance: ${kit.balance}")
+            receiveAddress.postValue("Address: ${kit.receiveAddress}")
+            balanceSyncState.postValue("SyncState: ${kit.syncState}")
+            tokenBalanceSyncState.postValue("TokenSyncState: ${kit.tokenBalanceSyncState}")
+            transactionsSyncState.postValue("TxSyncState: ${kit.transactionsSyncState}")
+            lastBlockHeight.postValue("LastBlockHeight: ${kit.lastBlockHeight}")
+        }
     }
 
     fun start() {
-        App.instance.solanaKit.start()
+        kit?.start()
     }
 
     fun refresh() {
-        App.instance.solanaKit.refresh()
+        kit?.refresh()
     }
 
     fun stop() {
-        App.instance.solanaKit.stop()
+        kit?.stop()
     }
 
 }

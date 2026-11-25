@@ -1,0 +1,56 @@
+{
+  "context": {
+    "apiVersion": "4.4.0",
+    "slot": 473559466
+  },
+  "value": [
+    {
+      "data": {
+        "parsed": {
+          "info": {
+            "decimals": 6,
+            "extensions": [
+              {
+                "extension": "transferHook",
+                "state": {
+                  "authority": "DMdBa812dBW1CHVhmTyUyVcrBnSbZbfoFC7U14k4riH1",
+                  "programId": null
+                }
+              },
+              {
+                "extension": "metadataPointer",
+                "state": {
+                  "authority": null,
+                  "metadataAddress": "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn"
+                }
+              },
+              {
+                "extension": "tokenMetadata",
+                "state": {
+                  "additionalMetadata": [],
+                  "mint": "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn",
+                  "name": "Pump",
+                  "symbol": "PUMP",
+                  "updateAuthority": null,
+                  "uri": "https://ipfs.io/ipfs/bafkreibcglldkfdekdkxgumlveoe6qv3pbiceypkwtli33clbzul7leo4m"
+                }
+              }
+            ],
+            "freezeAuthority": null,
+            "isInitialized": true,
+            "mintAuthority": null,
+            "supply": "820617374398028773"
+          },
+          "type": "mint"
+        },
+        "program": "spl-token-2022",
+        "space": 474
+      },
+      "executable": false,
+      "lamports": 9620719493,
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "rentEpoch": 18446744073709551615,
+      "space": 474
+    }
+  ]
+}

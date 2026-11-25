@@ -9,8 +9,8 @@ import io.horizontalsystems.solanakit.models.InitialSyncEntity
 @Dao
 interface InitialSyncDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    fun insert(entity: InitialSyncEntity)
+    suspend fun insert(entity: InitialSyncEntity)
 
     @Query("SELECT * FROM InitialSyncEntity")
-    fun getAllEntities(): List<InitialSyncEntity>
+    suspend fun getAllEntities(): List<InitialSyncEntity>
 }

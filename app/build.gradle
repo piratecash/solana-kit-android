@@ -6,12 +6,12 @@ def localProperties = new Properties()
 localProperties.load(new FileInputStream(rootProject.file("local.properties")))
 
 android {
-    compileSdk 34
+    compileSdk 35
     android.buildFeatures.buildConfig true
     defaultConfig {
         applicationId 'io.horizontalsystems.solanakit'
         minSdk 27
-        targetSdk 34
+        targetSdk 35
         versionCode 1
         versionName "1.0"
 
@@ -68,7 +68,7 @@ dependencies {
     implementation libs.lifecycle.viewmodel.ktx
     implementation 'androidx.navigation:navigation-fragment-ktx:2.6.0'
     implementation 'androidx.navigation:navigation-ui-ktx:2.6.0'
-    implementation(libs.hd.wallet.kit.android) {
+    implementation(libs.hd.wallet.kit.kmp.android) {
         exclude group: 'org.bouncycastle', module: 'bcprov-jdk15on'
         exclude group: 'org.bouncycastle', module: 'bcprov-jdk15to18'
     }

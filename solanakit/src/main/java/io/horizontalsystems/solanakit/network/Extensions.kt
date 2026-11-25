@@ -1,12 +1,16 @@
 package io.horizontalsystems.solanakit.network
 
-import android.util.Log
+import co.touchlab.kermit.Logger
 import com.solana.networking.JsonRpcDriver
 import com.solana.networking.RpcRequest
 import kotlinx.coroutines.delay
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+
+/** Internal, but read by the public inline [makeRequestResultWithRepeat]. */
+@PublishedApi
+internal val networkLogger: Logger = Logger.withTag("SolanaKit")
 
 suspend inline fun <reified R> JsonRpcDriver.makeRequestResultWithRepeat(
     request: RpcRequest,
@@ -23,7 +27,7 @@ suspend inline fun <reified R> JsonRpcDriver.makeRequestResultWithRepeat(
 
                 response.error?.let { errorResponse ->
                     errorResponse.retryAfter?.let { retryAfter ->
-                        timeout = (retryAfter+1)*1000
+                        timeout = (retryAfter + 1) * 1000
                     }
                     val rpcException = parseRpcError(errorResponse.message)
                     check(rpcException?.error?.code != 429) {
@@ -36,21 +40,18 @@ suspend inline fun <reified R> JsonRpcDriver.makeRequestResultWithRepeat(
                 return Result.success(null)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
             val tooManyRequests = e.message?.contains("429") == true
             if (tooManyRequests) {
-                Log.d(
-                    "Solana kit",
+                networkLogger.d {
                     "makeRequestResultWithRepeat waiting for ${timeout / 1000} seconds to request ${request.method} with params ${request.params}"
-                )
+                }
                 /* retry-after header is not present in the response, so we can't use it to determine the delay */
                 delay(timeout)
                 timeout *= 1.5.toLong()
             } else {
-                Log.d(
-                    "Solana kit",
+                networkLogger.w(e) {
                     "makeRequestResultWithRepeat exception in ${request.method} with params ${request.params}"
-                )
+                }
             }
         }
     }
@@ -78,7 +79,7 @@ fun parseRpcError(
     return try {
         json.decodeFromString(serializer, errorMessage)
     } catch (e: Exception) {
-        Log.w("Solana kit", "Unexpected error while parsing error response: $errorMessage", e)
+        networkLogger.w(e) { "Unexpected error while parsing error response: $errorMessage" }
         null
     }
 }

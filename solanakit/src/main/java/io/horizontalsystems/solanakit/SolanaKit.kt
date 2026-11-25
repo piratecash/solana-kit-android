@@ -1,33 +1,49 @@
 package io.horizontalsystems.solanakit
 
-import android.app.Application
-import android.content.Context
-import android.util.Log
+import co.touchlab.kermit.Logger
 import com.solana.actions.Action
 import com.solana.api.Api
-import com.solana.networking.HttpNetworkingRouter
 import com.solana.networking.Network
+import io.horizontalsystems.databasenaming.DatabaseNameResolver
 import io.horizontalsystems.solanakit.core.BalanceManager
 import io.horizontalsystems.solanakit.core.ISyncListener
 import io.horizontalsystems.solanakit.core.SolanaDatabaseManager
 import io.horizontalsystems.solanakit.core.SyncManager
 import io.horizontalsystems.solanakit.core.TokenAccountManager
+import io.horizontalsystems.solanakit.database.clearDatabaseGroup
 import io.horizontalsystems.solanakit.database.main.MainStorage
+import io.horizontalsystems.solanakit.database.migrateDatabaseGroup
+import io.horizontalsystems.solanakit.database.requireValidDatabaseGroup
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.Address
 import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.FullTransaction
+import io.horizontalsystems.solanakit.models.RawTransactionBroadcastResult
+import io.horizontalsystems.solanakit.models.RawTransactionRetryMetadata
 import io.horizontalsystems.solanakit.models.RpcSource
+import io.horizontalsystems.solanakit.models.SignedRawSolanaTransaction
 import io.horizontalsystems.solanakit.models.Transaction
+import io.horizontalsystems.solanakit.network.AlchemyEndpoint
+import io.horizontalsystems.solanakit.network.ApiKeyRotation
 import io.horizontalsystems.solanakit.network.ConnectionManager
+import io.horizontalsystems.solanakit.network.FailoverRpcRouter
+import io.horizontalsystems.solanakit.network.PublicPacer
+import io.horizontalsystems.solanakit.network.SolanaNetworkErrorListener
 import io.horizontalsystems.solanakit.noderpc.ApiSyncer
 import io.horizontalsystems.solanakit.transactions.PendingTransactionSyncer
-import io.horizontalsystems.solanakit.transactions.SolanaFmService
+import io.horizontalsystems.solanakit.transactions.TransactionFetcher
 import io.horizontalsystems.solanakit.transactions.TransactionManager
 import io.horizontalsystems.solanakit.transactions.TransactionSyncer
+import io.horizontalsystems.sqlcipher.room.DatabaseKeyMismatchException
+import io.horizontalsystems.sqlcipher.room.DatabaseMigrationConflictException
+import io.horizontalsystems.sqlcipher.room.DatabaseMigrationInProgressException
+import io.horizontalsystems.sqlcipher.room.DatabaseMigrationRequiredException
+import io.horizontalsystems.sqlcipher.room.DatabaseMigrationResult
+import io.horizontalsystems.sqlcipher.room.InsufficientDatabaseMigrationSpaceException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,13 +52,12 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.sol4k.Base58
 import org.sol4k.Connection
-import org.sol4k.RpcUrl
 import org.sol4k.VersionedTransaction
-import org.sol4k.api.Commitment
 import java.math.BigDecimal
 import java.time.Instant
 import java.util.Base64
 import java.util.Objects
+import kotlin.time.TimeSource
 
 class SolanaKit(
     private val apiSyncer: ApiSyncer,
@@ -50,11 +65,13 @@ class SolanaKit(
     private val tokenAccountManager: TokenAccountManager,
     private val transactionManager: TransactionManager,
     private val syncManager: SyncManager,
-    rpcSource: RpcSource,
+    private val rpcSource: RpcSource,
     private val address: Address,
+    private val router: FailoverRpcRouter,
 ) : ISyncListener {
 
     private var scope: CoroutineScope? = null
+    private val logger = Logger.withTag("SolanaKit")
 
     private val _balanceSyncStateFlow = MutableStateFlow(syncState)
     private val _tokenBalanceSyncStateFlow = MutableStateFlow(tokenBalanceSyncState)
@@ -64,7 +81,7 @@ class SolanaKit(
     private val _balanceFlow = MutableStateFlow(balance)
 
     val isMainnet: Boolean = rpcSource.endpoint.network == Network.mainnetBeta
-    val receiveAddress = address.publicKey.toBase58()
+    val receiveAddress = Base58.encode(address.publicKey.pubkey)
 
     val lastBlockHeight: Long?
         get() = apiSyncer.lastBlockHeight
@@ -97,24 +114,26 @@ class SolanaKit(
         return versionedTx.calculateFee(baseFeeLamports)
     }
 
-    fun sendRawTransaction(hexEncoded: ByteArray, signer: Signer): FullTransaction {
+    suspend fun sendRawTransaction(hexEncoded: ByteArray, signer: Signer): FullTransaction {
         val base64Encoded = Base64.getEncoder().encodeToString(hexEncoded)
         val versionedTx = VersionedTransaction.from(base64Encoded)
         val signature = Base58.encode(signer.account.sign(versionedTx.message.serialize()))
         versionedTx.addSignature(signature)
         val base64WithSignature = Base64.getEncoder().encodeToString(versionedTx.serialize())
-        val connection = Connection(RpcUrl.MAINNNET)
-        val blockHash = connection.getLatestBlockhashExtended(Commitment.FINALIZED)
-        val transactionHash = connection.sendTransaction(versionedTx)
+        val blockHash = transactionManager.latestBlockhash()
+        val transactionHash = router.withDirectUrl("sendTransaction") { url ->
+            Connection(url.toString()).sendTransaction(versionedTx)
+        }
         val fullTransaction = FullTransaction(
             transaction = Transaction(
                 hash = transactionHash,
                 timestamp = Instant.now().epochSecond,
                 fee = versionedTx.calculateFee(baseFeeLamports),
-                from = address.publicKey.toBase58(),
+                from = Base58.encode(address.publicKey.pubkey),
                 to = null,
                 amount = null,
                 pending = true,
+                blockHash = blockHash.blockhash,
                 lastValidBlockHeight = blockHash.lastValidBlockHeight,
                 base64Encoded = base64WithSignature
             ),
@@ -145,7 +164,7 @@ class SolanaKit(
 
     fun start() {
         scope = CoroutineScope(Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
-            Log.d("SolanaKit", "Coroutine error: ${throwable.message}")
+            logger.d { "Coroutine error: ${throwable.message}" }
         })
         scope?.launch {
             syncManager.start(this)
@@ -154,6 +173,15 @@ class SolanaKit(
 
     fun stop() {
         syncManager.stop()
+        scope?.cancel()
+    }
+
+    fun pause() {
+        syncManager.pause()
+    }
+
+    fun resume() {
+        syncManager.resume()
     }
 
     fun refresh(): Boolean {
@@ -179,7 +207,7 @@ class SolanaKit(
         put("Transaction Sync State", transactionsSyncState)
     }
 
-    fun addTokenAccount(mintAddress: String, decimals: Int) {
+    suspend fun addTokenAccount(mintAddress: String, decimals: Int) {
         tokenAccountManager.addTokenAccount(receiveAddress, mintAddress, decimals)
 
         refresh()
@@ -208,24 +236,60 @@ class SolanaKit(
     suspend fun getAllTransactions(
         incoming: Boolean? = null,
         fromHash: String? = null,
-        limit: Int? = null
+        limit: Int? = null,
+        sinceTimestamp: Long? = null,
+        untilTimestamp: Long? = null
     ): List<FullTransaction> =
-        transactionManager.getAllTransaction(incoming, fromHash, limit)
+        transactionManager.getAllTransaction(incoming, fromHash, limit, sinceTimestamp, untilTimestamp)
 
     suspend fun getSolTransactions(
         incoming: Boolean? = null,
         fromHash: String? = null,
-        limit: Int? = null
+        limit: Int? = null,
+        sinceTimestamp: Long? = null,
+        untilTimestamp: Long? = null
     ): List<FullTransaction> =
-        transactionManager.getSolTransaction(incoming, fromHash, limit)
+        transactionManager.getSolTransaction(incoming, fromHash, limit, sinceTimestamp, untilTimestamp)
 
     suspend fun getSplTransactions(
         mintAddress: String,
         incoming: Boolean? = null,
         fromHash: String? = null,
-        limit: Int? = null
+        limit: Int? = null,
+        sinceTimestamp: Long? = null,
+        untilTimestamp: Long? = null
     ): List<FullTransaction> =
-        transactionManager.getSplTransaction(mintAddress, incoming, fromHash, limit)
+        transactionManager.getSplTransaction(mintAddress, incoming, fromHash, limit, sinceTimestamp, untilTimestamp)
+
+    suspend fun oldestTransactionTimestamp(incoming: Boolean? = null): Long? =
+        transactionManager.oldestTimestamp(incoming)
+
+    suspend fun oldestSolTransactionTimestamp(incoming: Boolean? = null): Long? =
+        transactionManager.oldestSolTimestamp(incoming)
+
+    suspend fun oldestSplTransactionTimestamp(mintAddress: String, incoming: Boolean? = null): Long? =
+        transactionManager.oldestSplTimestamp(mintAddress, incoming)
+
+    suspend fun signedSolTransaction(
+        toAddress: Address,
+        amount: Long,
+        signer: Signer
+    ): SignedRawSolanaTransaction =
+        transactionManager.signedSolTransaction(toAddress, amount, signer.account)
+
+    suspend fun signedSplTransaction(
+        mintAddress: Address,
+        toAddress: Address,
+        amount: Long,
+        signer: Signer
+    ): SignedRawSolanaTransaction =
+        transactionManager.signedSplTransaction(mintAddress, toAddress, amount, signer.account)
+
+    suspend fun broadcastRawTransaction(
+        rawTransaction: ByteArray,
+        retryMetadata: RawTransactionRetryMetadata? = null
+    ): RawTransactionBroadcastResult =
+        transactionManager.broadcastRawTransaction(rawTransaction, retryMetadata)
 
     suspend fun sendSol(toAddress: Address, amount: Long, signer: Signer): FullTransaction =
         transactionManager.sendSol(toAddress, amount, signer.account)
@@ -284,62 +348,100 @@ class SolanaKit(
 
     companion object {
         val baseFeeLamports = 5000
-        val fee = BigDecimal(0.000155)
+        val fee = BigDecimal("0.000155")
 
         // Solana network will not store a SOL account with less than ~0.001 SOL.
         // Which means you can't have a SOL account with 0 SOL stored on the network.
-        val accountRentAmount = BigDecimal(0.001)
+        val accountRentAmount = BigDecimal("0.001")
 
 
-        fun getInstance(
-            application: Application,
+        /**
+         * Opens the wallet's two databases, which [migrateDatabase] must have encrypted with the same
+         * [databaseKey] first. [databaseKey] must be exactly 32 bytes and [walletId] must be non-blank and
+         * free of path separators, otherwise [IllegalArgumentException] is thrown before any I/O.
+         *
+         * Recovery: [DatabaseMigrationRequiredException] or [DatabaseMigrationInProgressException] mean
+         * [migrateDatabase] has to run; [DatabaseKeyMismatchException] keeps the databases and is only
+         * recoverable through [clear] plus a new key, which loses the stored wallet data.
+         */
+        suspend fun getInstance(
+            context: PlatformContext,
             addressString: String,
             rpcSource: RpcSource,
             walletId: String,
-            limitFirstTimeTransactionCount: Int = -1,
-            limitTimeTransactionCount: Int = -1
+            databaseKey: ByteArray,
+            rpcApiKeys: List<String> = emptyList(),
+            networkErrorListener: SolanaNetworkErrorListener? = null,
+            nameResolver: DatabaseNameResolver = DatabaseNameResolver.Identity,
         ): SolanaKit {
-            val router = HttpNetworkingRouter(rpcSource.endpoint)
-            val connectionManager = ConnectionManager(application)
+            requireValidDatabaseGroup(walletId, databaseKey)
 
-            val mainDatabase = SolanaDatabaseManager.getMainDatabase(application, walletId)
+            val router = FailoverRpcRouter(
+                publicEndpoint = rpcSource.endpoint,
+                keys = ApiKeyRotation.forNetwork(rpcSource.endpoint.network, rpcApiKeys),
+                alchemy = AlchemyEndpoint(),
+                pacer = PublicPacer(TimeSource.Monotonic),
+                networkErrorListener = networkErrorListener,
+            )
+            val mainDatabase = SolanaDatabaseManager.getMainDatabase(context, walletId, databaseKey, nameResolver)
             val mainStorage = MainStorage(mainDatabase)
+            val lastBlockHeight = mainStorage.getLastBlockHeight()
+            val balance = mainStorage.getBalance()
+
+            val transactionDatabase =
+                SolanaDatabaseManager.getTransactionDatabase(context, walletId, databaseKey, nameResolver)
+            val transactionStorage = TransactionStorage(transactionDatabase, addressString)
 
             val rpcApiClient = Api(router)
             val rpcAction = Action(rpcApiClient, listOf())
-            val apiSyncer =
-                ApiSyncer(rpcApiClient, rpcSource.syncInterval, connectionManager, mainStorage)
-            val address = Address(addressString)
-
-            val balanceManager = BalanceManager(address.publicKey, rpcApiClient, mainStorage)
-
-            val transactionDatabase =
-                SolanaDatabaseManager.getTransactionDatabase(application, walletId)
-            val transactionStorage = TransactionStorage(transactionDatabase, addressString)
             val tokenAccountManager = TokenAccountManager(
                 walletAddress = addressString,
                 rpcClient = rpcApiClient,
                 storage = transactionStorage,
-                mainStorage = mainStorage,
-                solanaFmService = SolanaFmService()
+                mainStorage = mainStorage
+            )
+            tokenAccountManager.reloadFullTokenAccounts()
+
+            // Registers a system network callback: nothing below may suspend, or a cancel would leak it.
+            val connectionManager = ConnectionManager(context)
+            val apiSyncer = ApiSyncer(
+                rpcApiClient,
+                rpcSource.syncInterval,
+                connectionManager,
+                mainStorage,
+                lastBlockHeight
+            )
+            val address = Address(addressString)
+
+            val balanceManager = BalanceManager(
+                address.publicKey,
+                rpcApiClient,
+                mainStorage,
+                balance
             )
             val transactionManager =
                 TransactionManager(
                     address = address,
                     storage = transactionStorage,
                     rpcAction = rpcAction,
-                    tokenAccountManager = tokenAccountManager
+                    tokenAccountManager = tokenAccountManager,
+                    router = router
                 )
             val pendingTransactionSyncer =
-                PendingTransactionSyncer(rpcApiClient, transactionStorage, transactionManager)
+                PendingTransactionSyncer(
+                    rpcApiClient,
+                    transactionStorage,
+                    transactionManager,
+                    router,
+                    networkErrorListener
+                )
             val transactionSyncer = TransactionSyncer(
                 publicKey = address.publicKey,
                 rpcClient = rpcApiClient,
                 storage = transactionStorage,
                 transactionManager = transactionManager,
                 pendingTransactionSyncer = pendingTransactionSyncer,
-                limitFirstTimeTransactionCount = limitFirstTimeTransactionCount,
-                limitTimeTransactionCount = limitTimeTransactionCount
+                fetcher = TransactionFetcher(router)
             )
 
             val syncManager = SyncManager(
@@ -357,15 +459,48 @@ class SolanaKit(
                 transactionManager,
                 syncManager,
                 rpcSource,
-                address
+                address,
+                router
             )
             syncManager.listener = kit
 
             return kit
         }
 
-        fun clear(context: Context, walletId: String) {
-            SolanaDatabaseManager.clear(context, walletId)
+        /**
+         * Encrypts the wallet's existing plaintext databases with [databaseKey] (exactly 32 bytes), keeping
+         * their data, and recovers an interrupted migration. Call it before [getInstance] for this
+         * [walletId], with the same key; it is idempotent and accepts the same arguments, checked the same
+         * way before any I/O.
+         *
+         * Failures:
+         * - [DatabaseKeyMismatchException]: the databases were encrypted with another key and are kept
+         *   unchanged; only [clear] plus a new key recovers, losing the stored wallet data;
+         * - [DatabaseMigrationConflictException]: another migration or clear is running, so retry later; if
+         *   the group is mixed (one plaintext and one encrypted database), call [clear] instead — the
+         *   wallet data is lost and resynced;
+         * - [InsufficientDatabaseMigrationSpaceException]: free some space and retry, the plaintext
+         *   databases are kept unchanged.
+         */
+        suspend fun migrateDatabase(
+            context: PlatformContext,
+            walletId: String,
+            databaseKey: ByteArray,
+            nameResolver: DatabaseNameResolver = DatabaseNameResolver.Identity,
+        ): DatabaseMigrationResult = migrateDatabaseGroup(context, walletId, databaseKey, nameResolver)
+
+        /**
+         * Deletes both database files of [walletId] together with any leftovers of an interrupted
+         * migration. Throws [IllegalArgumentException] for a blank [walletId] or one containing a path
+         * separator, and [DatabaseMigrationConflictException] while another migration or clear runs in the
+         * same directory; retry later. Stop the kit first.
+         */
+        fun clear(
+            context: PlatformContext,
+            walletId: String,
+            nameResolver: DatabaseNameResolver = DatabaseNameResolver.Identity,
+        ) {
+            clearDatabaseGroup(context, walletId, nameResolver)
         }
     }
 

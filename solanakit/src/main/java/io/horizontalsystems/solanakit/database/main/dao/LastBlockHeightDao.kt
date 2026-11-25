@@ -10,9 +10,9 @@ import io.horizontalsystems.solanakit.models.LastBlockHeightEntity
 interface LastBlockHeightDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    fun insert(lastBlockHeight: LastBlockHeightEntity)
+    suspend fun insert(lastBlockHeight: LastBlockHeightEntity)
 
     @Query("SELECT * FROM LastBlockHeightEntity")
-    fun getLastBlockHeight(): LastBlockHeightEntity?
+    suspend fun getLastBlockHeight(): LastBlockHeightEntity?
 
 }
