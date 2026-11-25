@@ -16,6 +16,12 @@ interface TokenAccountDao {
     @Query("SELECT * FROM TokenAccount WHERE mintAddress=:address LIMIT 1")
     suspend fun getByMintAddress(address: String): TokenAccount?
 
+    @Query("SELECT * FROM TokenAccount WHERE address=:address")
+    suspend fun getByAddress(address: String): TokenAccount?
+
+    @Query("DELETE FROM TokenAccount WHERE address=:address")
+    suspend fun delete(address: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(tokenAccount: TokenAccount)
 

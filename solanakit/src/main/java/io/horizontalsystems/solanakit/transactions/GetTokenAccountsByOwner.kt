@@ -29,12 +29,12 @@ class GetTokenAccountsByOwnerRequest(tokenAccount: PublicKey) : RpcRequest() {
     }
 }
 
-class GetParsedTokenAccountsByOwnerRequest(owner: PublicKey) : RpcRequest() {
+class GetParsedTokenAccountsByOwnerRequest(owner: PublicKey, programId: String) : RpcRequest() {
     override val method: String = "getTokenAccountsByOwner"
     override val params = buildJsonArray {
         add(owner.toString())
         addJsonObject {
-            put("programId", TokenProgram.PROGRAM_ID.toString())
+            put("programId", programId)
         }
         addJsonObject {
             put("encoding", RpcSendTransactionConfig.Encoding.jsonParsed.getEncoding())
@@ -114,9 +114,12 @@ suspend fun Api.getTokenAccountsByOwner(tokenAccount: PublicKey): Result<List<Sp
         else result as Result<List<SplTokenAccountWithPublicKey>> // safe cast, null case handled above
     }
 
-suspend fun Api.getParsedTokenAccountsByOwner(owner: PublicKey): Result<List<ParsedSplTokenAccountWithPublicKey>> =
+suspend fun Api.getParsedTokenAccountsByOwner(
+    owner: PublicKey,
+    programId: String,
+): Result<List<ParsedSplTokenAccountWithPublicKey>> =
     router.makeRequestResultWithRepeat(
-        GetParsedTokenAccountsByOwnerRequest(owner),
+        GetParsedTokenAccountsByOwnerRequest(owner, programId),
         GetParsedTokenAccountsByOwnerSerializer()
     ).let { result ->
         @Suppress("UNCHECKED_CAST")

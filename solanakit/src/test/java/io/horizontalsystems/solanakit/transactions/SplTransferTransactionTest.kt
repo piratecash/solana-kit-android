@@ -37,15 +37,30 @@ class SplTransferTransactionTest {
         assertEquals("0c87d612000000000006", message.instructions.single().data.toHexString())
     }
 
+    @Test
+    fun splTransferTransaction_token2022NewRecipient_createsAccountUnderToken2022ThenTransfersChecked() {
+        val message = decodeLegacyMessage(serialize(createDestination = true, programId = TOKEN_2022_PROGRAM))
+
+        assertEquals(listOf(ASSOCIATED_TOKEN_PROGRAM, TOKEN_2022_PROGRAM), message.instructions.map { it.program })
+        // Create(payer, ata, owner, mint, system program, token program): the ATA is derived under the last one.
+        assertEquals(TOKEN_2022_PROGRAM, message.keys[message.instructions.first().accounts[5]])
+        val transfer = message.instructions.last()
+        assertEquals(listOf(SOURCE, MINT, DESTINATION), transfer.accounts.take(3).map { message.keys[it] })
+        assertEquals("0c87d612000000000006", transfer.data.toHexString())
+    }
+
     private val owner = HotAccount()
 
-    private fun serialize(createDestination: Boolean): ByteArray = splTransferTransaction(
-        mintAddress = PublicKey(MINT),
-        decimals = 6,
-        source = PublicKey(SOURCE),
-        destination = PublicKey(DESTINATION),
-        destinationOwner = PublicKey(DESTINATION_OWNER),
-        createDestination = createDestination,
+    private fun serialize(createDestination: Boolean, programId: String = TOKEN_PROGRAM): ByteArray = splTransferTransaction(
+        transfer = SplTransfer(
+            programId = PublicKey(programId),
+            mint = PublicKey(MINT),
+            decimals = 6,
+            source = PublicKey(SOURCE),
+            destination = PublicKey(DESTINATION),
+            destinationOwner = PublicKey(DESTINATION_OWNER),
+            createDestination = createDestination,
+        ),
         amount = 1_234_567,
         owner = owner.publicKey,
         instructions = emptyList(),
@@ -103,6 +118,7 @@ class SplTransferTransactionTest {
 
     private companion object {
         const val TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        const val TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         const val ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
         const val MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
         val SOURCE: String = Base58.encode(ByteArray(32) { 1 })

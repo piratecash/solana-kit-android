@@ -11,6 +11,15 @@ import io.horizontalsystems.solanakit.models.MintAccount
 import io.horizontalsystems.solanakit.models.TokenAccount
 import io.horizontalsystems.solanakit.models.Transaction
 
+/** One-time re-fetches of stored rows, each with its own cursor row in LastSyncedTransaction. */
+enum class TokenTransferRepair(internal val sourceName: String, internal val withoutAmount: Boolean) {
+    // Rows stored before token transfers were attributed by owner.
+    ByOwner("token-transfer-repair-v1", withoutAmount = false),
+
+    // Rows stored before Token-2022 mints were accepted: a token change leaves the SOL amount empty.
+    Token2022("token-2022-repair-v1", withoutAmount = true),
+}
+
 class TransactionStorage(
     private val database: TransactionDatabase,
     private val address: String
@@ -30,19 +39,21 @@ class TransactionStorage(
     suspend fun syncSourceNames(prefix: String): List<String> =
         syncerStateDao.namesWithPrefix(prefix)
 
-    suspend fun tokenTransferRepairCursor(): String? =
-        syncerStateDao.get(TOKEN_TRANSFER_REPAIR_SOURCE)?.hash
+    suspend fun tokenTransferRepairCursor(repair: TokenTransferRepair): String? =
+        syncerStateDao.get(repair.sourceName)?.hash
 
-    suspend fun saveTokenTransferRepairCursor(cursor: String) {
-        syncerStateDao.save(LastSyncedTransaction(TOKEN_TRANSFER_REPAIR_SOURCE, cursor))
+    suspend fun saveTokenTransferRepairCursor(repair: TokenTransferRepair, cursor: String) {
+        syncerStateDao.save(LastSyncedTransaction(repair.sourceName, cursor))
     }
 
-    /** Confirmed transactions with token transfers strictly after the given position, newest first; -1 = no limit. */
+    /** Confirmed transactions to repair strictly after the given position, newest first; -1 = no limit. */
     suspend fun tokenTransferTransactionHashes(
+        repair: TokenTransferRepair,
         beforeTimestamp: Long?,
         beforeHash: String?,
         limit: Int,
-    ): List<TransactionKey> = transactionsDao.tokenTransferTransactionKeys(beforeTimestamp, beforeHash, limit)
+    ): List<TransactionKey> =
+        transactionsDao.tokenTransferTransactionKeys(repair.withoutAmount, beforeTimestamp, beforeHash, limit)
 
     suspend fun pendingTransactions(): List<Transaction> =
         transactionsDao.pendingTransactions()
@@ -262,6 +273,18 @@ class TransactionStorage(
     suspend fun getFullTokenAccounts(): List<FullTokenAccount> =
         tokenAccountDao.getAllFullAccounts().map { it.fullTokenAccount }
 
+    /** Moves a row to the mint's actual account; a row the discovery already stored there is kept. */
+    suspend fun replaceTokenAccount(staleAddress: String, tokenAccount: TokenAccount) {
+        database.useWriterConnection { transactor ->
+            transactor.immediateTransaction {
+                tokenAccountDao.delete(staleAddress)
+                if (tokenAccountDao.getByAddress(tokenAccount.address) == null) {
+                    tokenAccountDao.insert(tokenAccount)
+                }
+            }
+        }
+    }
+
     suspend fun addTokenAccountIfMissing(tokenAccount: TokenAccount, mintAccount: MintAccount) {
         database.useWriterConnection { transactor ->
             transactor.immediateTransaction {
@@ -276,9 +299,6 @@ class TransactionStorage(
     }
 
     private companion object {
-        // Stored as a key-value row in LastSyncedTransaction, so no schema change is needed.
-        const val TOKEN_TRANSFER_REPAIR_SOURCE = "token-transfer-repair-v1"
-
         // Keeps the inlined IN list far below SQLite's statement length limit.
         const val HASH_QUERY_CHUNK = 500
 

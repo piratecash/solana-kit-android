@@ -7,6 +7,7 @@ import com.solana.api.Header
 import com.solana.api.Message
 import com.solana.api.Meta
 import com.solana.api.Status
+import com.solana.api.TokenAmountInfoResponse
 import com.solana.core.PublicKey
 import com.solana.networking.Network
 import com.solana.networking.NetworkingRouter
@@ -23,6 +24,8 @@ import io.horizontalsystems.solanakit.database.transaction.TransactionDatabase
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.Address
 import io.horizontalsystems.solanakit.models.FullTransaction
+import io.horizontalsystems.solanakit.models.MintAccount
+import io.horizontalsystems.solanakit.models.TokenAccount
 import io.horizontalsystems.solanakit.models.Transaction
 import io.horizontalsystems.solanakit.network.AlchemyEndpoint
 import io.horizontalsystems.solanakit.network.ApiKeyRotation
@@ -32,6 +35,7 @@ import io.horizontalsystems.solanakit.network.PublicPacer
 import io.horizontalsystems.solanakit.network.RpcExecutor
 import io.horizontalsystems.solanakit.network.RpcOutcome
 import io.horizontalsystems.solanakit.noderpc.endpoints.RpcSignatureInformation
+import io.horizontalsystems.solanakit.transactions.AccountOwner
 import io.horizontalsystems.solanakit.transactions.MintTokenAccountInfo
 import io.horizontalsystems.solanakit.transactions.MintTokenAccountInfoParsedData
 import io.horizontalsystems.solanakit.transactions.MintTokenAccountTokenInfo
@@ -41,8 +45,11 @@ import io.horizontalsystems.solanakit.transactions.TransactionFetcher
 import io.horizontalsystems.solanakit.transactions.TransactionManager
 import io.horizontalsystems.solanakit.transactions.TransactionResult
 import io.horizontalsystems.solanakit.transactions.TransactionSyncer
+import io.horizontalsystems.solanakit.transactions.WellKnownPrograms
+import io.horizontalsystems.solanakit.transactions.associatedTokenAddress
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
@@ -58,6 +65,7 @@ import org.junit.rules.TemporaryFolder
 import org.sol4k.Base58
 import java.io.File
 import java.io.IOException
+import java.math.BigDecimal
 import java.net.URL
 import kotlin.random.Random
 import kotlin.time.TimeSource
@@ -139,6 +147,22 @@ class HistorySyncDesktopTest {
         assertEquals(70, kit.storage.getFullTransactions(listOf("sent")).single().transaction.timestamp)
     }
 
+    @Test
+    fun sync_newToken2022Stream_existingInstall_backfillsFullStreamHistory() = runBlocking {
+        kit = open()
+        onChain("old", slot = 5)
+        kit.syncer.sync()
+        assertEquals("done", kit.storage.getSyncedBlockTime("history-backward-v1")?.hash)
+        val account = associatedTokenAddress(USER, FakeRpcRouter.TOKEN_2022_MINT, WellKnownPrograms.TOKEN_2022_PROGRAM)
+        kit.storage.saveTokenAccounts(listOf(TokenAccount(account, FakeRpcRouter.TOKEN_2022_MINT, BigDecimal.ZERO, 6)), listOf(MintAccount(FakeRpcRouter.TOKEN_2022_MINT, 6)))
+        node.streams[account] = mutableListOf(RpcSignatureInformation(signature = "t22", confirmationStatus = "finalized", slot = 1, blockTime = 10))
+        transactions["t22"] = solTransfer("t22", slot = 1)
+
+        kit.syncer.sync()
+
+        assertEquals(listOf("old", "t22"), storedHashes())
+    }
+
     private fun open() = SyncerFixture(tmp.root, "Solana-history", USER, node)
 
     private suspend fun storedHashes() = kit.storage.getTransactions(null, null, null).map { it.transaction.hash }
@@ -179,6 +203,7 @@ internal class SyncerFixture(root: File, name: String, user: String, node: FakeR
     private val mainDatabase = MainDatabase.getInstance(PlatformContext(root), "$name-main", DATABASE_KEY)
     val storage = TransactionStorage(transactionDatabase, user)
     val transactionManager: TransactionManager
+    val tokenAccountManager: TokenAccountManager
     val syncer: TransactionSyncer
 
     init {
@@ -191,11 +216,12 @@ internal class SyncerFixture(root: File, name: String, user: String, node: FakeR
             pacer = PublicPacer(TimeSource.Monotonic),
             networkErrorListener = null,
         )
+        tokenAccountManager = TokenAccountManager(user, api, storage, MainStorage(mainDatabase))
         transactionManager = TransactionManager(
             address = Address(user),
             storage = storage,
             rpcAction = Action(api, emptyList()),
-            tokenAccountManager = TokenAccountManager(user, api, storage, MainStorage(mainDatabase)),
+            tokenAccountManager = tokenAccountManager,
             router = router,
         )
         syncer = TransactionSyncer(
@@ -219,11 +245,14 @@ internal class SyncerFixture(root: File, name: String, user: String, node: FakeR
 }
 
 /**
- * A node with one wallet history (oldest first) and no token accounts. Unknown transactions are
- * answered with null, like the node does; while offline every call fails.
+ * A node with one wallet history (oldest first), optional per-address [streams] and no discoverable token
+ * accounts. Unknown transactions are answered with null, like the node does; while offline every call fails.
  */
 internal class FakeRpcRouter(private val transactions: Map<String, TransactionResult>) : NetworkingRouter, RpcExecutor {
     val history = mutableListOf<RpcSignatureInformation>()
+    val streams = mutableMapOf<String, MutableList<RpcSignatureInformation>>()
+    val owners = mutableMapOf<String, String>()
+    val balances = mutableMapOf<String, String>()
     val transactionRequests = mutableListOf<String>()
     var online = true
 
@@ -248,8 +277,13 @@ internal class FakeRpcRouter(private val transactions: Map<String, TransactionRe
                 transactionRequests += it
                 transactions[it]
             }
-            request.method == "getMultipleAccounts" -> params?.get(0)?.jsonArray?.map { mintAccountValue(it.jsonPrimitive.content) }
-            request.method == "getSignaturesForAddress" -> params?.get(1)?.jsonObject?.let(::listing)
+            request.method == "getMultipleAccounts" -> multipleAccounts(params)
+            request.method == "getTokenAccountBalance" -> params?.get(0)?.jsonPrimitive?.content?.let { address ->
+                balances[address]?.let { TokenAmountInfoResponse(it, decimals = 6, uiAmount = null, uiAmountString = it) }
+            }
+            request.method == "getSignaturesForAddress" -> params?.let {
+                listing(streams[it[0].jsonPrimitive.content] ?: history, it[1].jsonObject)
+            }
             request.method == "getTokenAccountsByOwner" -> emptyList<SplTokenAccountWithPublicKey>()
             else -> return unavailable()
         }
@@ -259,8 +293,18 @@ internal class FakeRpcRouter(private val transactions: Map<String, TransactionRe
     private fun <R> unavailable() = RpcResponse<R>(error = RpcError(code = -1, message = "unavailable"))
 
     // Every cursor here is a wallet signature, so `before`/`until` resolve by position in the wallet history.
-    private fun listing(config: JsonObject): List<RpcSignatureInformation> {
-        val newestFirst = history.asReversed()
+    // An owner lookup asks for an empty data slice; a mint lookup asks for the parsed account.
+    private fun multipleAccounts(params: JsonArray?): List<Any?>? {
+        val addresses = params?.get(0)?.jsonArray?.map { it.jsonPrimitive.content } ?: return null
+        return if (params[1].jsonObject.containsKey("dataSlice")) {
+            addresses.map { address -> owners[address]?.let(::AccountOwner) }
+        } else {
+            addresses.map(::mintAccountValue)
+        }
+    }
+
+    private fun listing(stream: List<RpcSignatureInformation>, config: JsonObject): List<RpcSignatureInformation> {
+        val newestFirst = stream.asReversed()
         val start = config.positionOf("before", newestFirst)?.plus(1) ?: 0
         val end = config.positionOf("until", newestFirst) ?: newestFirst.size
         return newestFirst.subList(start, maxOf(start, end)).take(config["limit"]?.jsonPrimitive?.int ?: newestFirst.size)
@@ -269,7 +313,7 @@ internal class FakeRpcRouter(private val transactions: Map<String, TransactionRe
     private fun JsonObject.positionOf(key: String, listed: List<RpcSignatureInformation>): Int? =
         get(key)?.jsonPrimitive?.contentOrNull?.let { signature -> listed.indexOfFirst { it.signature == signature } }
 
-    // A mint owned by another program (e.g. Token-2022) yields no MintAccount.
+    // A mint owned by a program other than the token programs yields no MintAccount.
     private fun mintAccountValue(mint: String) = MintTokenAccountValue(
         data = MintTokenAccountInfo(
             parsed = MintTokenAccountInfoParsedData(
@@ -278,11 +322,15 @@ internal class FakeRpcRouter(private val transactions: Map<String, TransactionRe
             ),
             program = "spl-token",
         ),
-        owner = if (mint == TOKEN_2022_MINT) TOKEN_2022_PROGRAM else TransactionSyncer.tokenProgramId,
+        owner = when (mint) {
+            TOKEN_2022_MINT -> WellKnownPrograms.TOKEN_2022_PROGRAM
+            FOREIGN_MINT -> WellKnownPrograms.SYSTEM_PROGRAM
+            else -> WellKnownPrograms.TOKEN_PROGRAM
+        },
     )
 
     companion object {
         val TOKEN_2022_MINT: String = Base58.encode(ByteArray(32) { 13 })
-        private const val TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        val FOREIGN_MINT: String = Base58.encode(ByteArray(32) { 14 })
     }
 }

@@ -1,5 +1,6 @@
 import com.solana.core.PublicKey
-import com.solana.programs.TokenProgram
+import io.horizontalsystems.solanakit.transactions.WellKnownPrograms
+import io.horizontalsystems.solanakit.transactions.mintAccountsSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
@@ -13,12 +14,12 @@ class GetTokenAccountsByOwnerTest {
     @Test
     fun parsedRequest_buildsJsonParsedRequest() {
         val owner = PublicKey.valueOf("5sRHUTn6ShZBpDyHMxfgCHvMVHLoeZWoeaYsqMVV3ssc")
-        val request = GetParsedTokenAccountsByOwnerRequest(owner)
+        val request = GetParsedTokenAccountsByOwnerRequest(owner, WellKnownPrograms.TOKEN_2022_PROGRAM)
 
         assertEquals("getTokenAccountsByOwner", request.method)
         assertEquals(owner.toString(), request.params[0].jsonPrimitive.content)
         assertEquals(
-            TokenProgram.PROGRAM_ID.toString(),
+            WellKnownPrograms.TOKEN_2022_PROGRAM,
             request.params[1].jsonObject["programId"]?.jsonPrimitive?.content
         )
         assertEquals(
@@ -63,8 +64,31 @@ class GetTokenAccountsByOwnerTest {
         assertEquals(6, account.decimals)
     }
 
+    @Test
+    fun parsedAccount_token2022AccountWithExtensions_mapsToTokenAndMintAccount() {
+        val parsed = json.decodeFromString(GetParsedTokenAccountsByOwnerSerializer(), fixture("token2022-token-account.json"))
+        val account = requireNotNull(parsed).single()
+
+        assertEquals("394cYnspcPZUzoFWHe78f5D16i3RxbX3LpNkJEWh7WW9", account.toTokenAccount().address)
+        assertEquals(BigDecimal("2258653607"), account.toTokenAccount().balance)
+        assertEquals("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn", account.toMintAccount().address)
+        assertEquals(6, account.toMintAccount().decimals)
+    }
+
+    @Test
+    fun mintAccounts_token2022MintWithExtensions_decodesOwnerAndDecimals() {
+        val mint = requireNotNull(json.decodeFromString(mintAccountsSerializer, fixture("token2022-mint-pump.json"))).single()
+
+        assertEquals(WellKnownPrograms.TOKEN_2022_PROGRAM, mint?.owner)
+        assertEquals(6, mint?.data?.parsed?.info?.decimals)
+    }
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private fun fixture(name: String): String =
+        requireNotNull(javaClass.getResource("/fixtures/$name")).readText()
+
     private fun decodeParsedAccounts(): List<ParsedSplTokenAccountWithPublicKey> {
-        val json = Json { ignoreUnknownKeys = true }
         val fixture = """
             {
               "context": {

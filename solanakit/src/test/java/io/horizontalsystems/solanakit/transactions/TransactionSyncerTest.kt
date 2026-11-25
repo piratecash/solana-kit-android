@@ -10,10 +10,12 @@ import com.solana.networking.RpcRequest
 import com.solana.networking.RpcResponse
 import com.solana.networking.decodeRpcResponse
 import io.horizontalsystems.solanakit.SolanaKit
+import io.horizontalsystems.solanakit.database.transaction.TokenTransferRepair
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.database.transaction.dao.TransactionsDao.TransactionKey
 import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.LastSyncedTransaction
+import io.horizontalsystems.solanakit.models.TokenAccount
 import io.horizontalsystems.solanakit.network.RpcExecutor
 import io.horizontalsystems.solanakit.network.RpcOutcome
 import io.horizontalsystems.solanakit.noderpc.endpoints.RpcSignatureInformation
@@ -40,6 +42,7 @@ import org.junit.Assert.fail
 import org.junit.Test
 import org.sol4k.Base58
 import java.io.IOException
+import java.math.BigDecimal
 
 class TransactionSyncerTest {
 
@@ -61,6 +64,8 @@ class TransactionSyncerTest {
     private val transactionRequests = mutableListOf<String>()
     private val transactionResponses = mutableMapOf<String, () -> RpcOutcome<TransactionResult>>()
     private var listingRequests = 0
+    private var discoveryRequests = 0
+    private val listedStreams = mutableSetOf<String>()
     private var tokenAccounts = emptyList<String>()
     private var discoveryFails = false
     private var listingFails = false
@@ -71,8 +76,8 @@ class TransactionSyncerTest {
     private var syncer = newSyncer()
 
     init {
-        coEvery { storage.tokenTransferRepairCursor() } returns null
-        coEvery { storage.tokenTransferTransactionHashes(any(), any(), any()) } returns emptyList()
+        coEvery { storage.tokenTransferRepairCursor(any()) } returns null
+        coEvery { storage.tokenTransferTransactionHashes(any(), any(), any(), any()) } returns emptyList()
         coEvery { storage.getSyncedBlockTime(any()) } answers { cursors[firstArg()]?.let { LastSyncedTransaction(firstArg(), it) } }
         coEvery { storage.setSyncedBlockTime(any()) } answers {
             val row = firstArg<LastSyncedTransaction>()
@@ -516,12 +521,65 @@ class TransactionSyncerTest {
     }
 
     @Test
-    fun sync_repairCursorDone_fetchesNoTransaction() = runBlocking {
-        coEvery { storage.tokenTransferRepairCursor() } returns "done"
+    fun sync_storedToken2022AccountAfterHistoryDone_listedInFullWithOneDiscoveryCall() = runBlocking {
+        onChain("old", slot = 1)
+        onChain("t1", slot = 2, TOKEN_2022_ACCOUNT)
+        syncer.sync()
+        assertEquals("done", backwardCursor())
+        coEvery { storage.getTokenAccounts() } returns listOf(tokenAccount(TOKEN_2022_ACCOUNT))
+        discoveryRequests = 0
 
         syncer.sync()
 
-        coVerify(exactly = 0) { storage.tokenTransferTransactionHashes(any(), any(), any()) }
+        assertTrue("t1" in storedRows)
+        assertEquals("t1", forwardCursor(TOKEN_2022_ACCOUNT))
+        assertEquals(1, discoveryRequests)
+    }
+
+    @Test
+    fun sync_storedLegacyDerivedPlaceholder_notListed() = runBlocking {
+        val placeholder = associatedTokenAddress(USER, MINT, WellKnownPrograms.TOKEN_PROGRAM)
+        coEvery { storage.getTokenAccounts() } returns listOf(tokenAccount(placeholder))
+
+        syncer.sync()
+
+        assertFalse(placeholder in listedStreams)
+    }
+
+    @Test
+    fun sync_ownerRepairDone_repairsRowsOfToken2022Source() = runBlocking {
+        coEvery { storage.tokenTransferRepairCursor(TokenTransferRepair.ByOwner) } returns "done"
+        coEvery { storage.tokenTransferTransactionHashes(TokenTransferRepair.Token2022, any(), any(), any()) } returns
+            listOf(TransactionKey(300, HASH_A), TransactionKey(200, HASH_B))
+        givenTransaction(HASH_A, blockTime = 290)
+        givenTransaction(HASH_B, blockTime = 190)
+
+        syncer.sync()
+
+        assertEquals(listOf(HASH_A, HASH_B), repairedTransactions().map { it.transaction.hash })
+        coVerify(exactly = 0) { storage.tokenTransferTransactionHashes(TokenTransferRepair.ByOwner, any(), any(), any()) }
+        coVerify { storage.saveTokenTransferRepairCursor(TokenTransferRepair.Token2022, "200:$HASH_B") }
+    }
+
+    @Test
+    fun sync_repairToken2022Mint_keepsTokenTransfer() = runBlocking {
+        givenRepairBatch()
+        givenTransaction(HASH_A, blockTime = 290)
+        givenTransaction(HASH_B, blockTime = 190)
+        mintAccountsResponse = { count -> RpcResponse(result = List(count) { mintAccountValue(WellKnownPrograms.TOKEN_2022_PROGRAM) }) }
+
+        syncer.sync()
+
+        assertTrue(repairedTransactions().all { it.tokenTransfers.single().mintAccount.address == MINT })
+    }
+
+    @Test
+    fun sync_repairCursorDone_fetchesNoTransaction() = runBlocking {
+        coEvery { storage.tokenTransferRepairCursor(any()) } returns "done"
+
+        syncer.sync()
+
+        coVerify(exactly = 0) { storage.tokenTransferTransactionHashes(any(), any(), any(), any()) }
         assertTrue(transactionRequests.isEmpty())
     }
 
@@ -529,7 +587,7 @@ class TransactionSyncerTest {
     fun sync_repairBatchEmpty_savesDoneCursor() = runBlocking {
         syncer.sync()
 
-        coVerify { storage.saveTokenTransferRepairCursor("done") }
+        coVerify { storage.saveTokenTransferRepairCursor(TokenTransferRepair.ByOwner, "done") }
     }
 
     @Test
@@ -543,8 +601,8 @@ class TransactionSyncerTest {
         val repaired = repairedTransactions()
         assertEquals(listOf(HASH_A, HASH_B), repaired.map { it.transaction.hash })
         assertTrue(repaired.all { it.tokenTransfers.single().tokenTransfer.incoming })
-        coVerify { storage.tokenTransferTransactionHashes(null, null, REPAIR_BATCH) }
-        coVerify { storage.saveTokenTransferRepairCursor("200:$HASH_B") }
+        coVerify { storage.tokenTransferTransactionHashes(TokenTransferRepair.ByOwner, null, null, REPAIR_BATCH) }
+        coVerify { storage.saveTokenTransferRepairCursor(TokenTransferRepair.ByOwner, "200:$HASH_B") }
     }
 
     @Test
@@ -566,12 +624,12 @@ class TransactionSyncerTest {
         givenTransaction(HASH_B, blockTime = 190)
 
         repeat(2) { syncer.sync() }
-        coVerify(exactly = 0) { storage.saveTokenTransferRepairCursor(any()) }
+        coVerify(exactly = 0) { storage.saveTokenTransferRepairCursor(any(), any()) }
 
         syncer.sync()
 
         assertEquals(listOf(HASH_B), repairedTransactions().map { it.transaction.hash })
-        coVerify { storage.saveTokenTransferRepairCursor("200:$HASH_B") }
+        coVerify { storage.saveTokenTransferRepairCursor(TokenTransferRepair.ByOwner, "200:$HASH_B") }
     }
 
     @Test
@@ -582,7 +640,7 @@ class TransactionSyncerTest {
         syncer.sync()
 
         assertEquals(listOf(HASH_A), repairedTransactions().map { it.transaction.hash })
-        coVerify { storage.saveTokenTransferRepairCursor("300:$HASH_A") }
+        coVerify { storage.saveTokenTransferRepairCursor(TokenTransferRepair.ByOwner, "300:$HASH_A") }
     }
 
     @Test
@@ -607,13 +665,13 @@ class TransactionSyncerTest {
         syncer.sync()
 
         assertTrue(handled.isEmpty())
-        coVerify(exactly = 0) { storage.saveTokenTransferRepairCursor(any()) }
+        coVerify(exactly = 0) { storage.saveTokenTransferRepairCursor(any(), any()) }
         assertTrue(syncer.syncState.value is SolanaKit.SyncState.Synced)
     }
 
     @Test
     fun sync_repairThrows_endsSynced() = runBlocking {
-        coEvery { storage.tokenTransferRepairCursor() } throws IllegalStateException("broken row")
+        coEvery { storage.tokenTransferRepairCursor(any()) } throws IllegalStateException("broken row")
 
         syncer.sync()
 
@@ -622,7 +680,7 @@ class TransactionSyncerTest {
 
     @Test
     fun sync_repairCancelled_endsNotSynced() = runBlocking {
-        coEvery { storage.tokenTransferRepairCursor() } throws CancellationException()
+        coEvery { storage.tokenTransferRepairCursor(any()) } throws CancellationException()
 
         syncIgnoringCancellation()
 
@@ -639,7 +697,7 @@ class TransactionSyncerTest {
         syncJob.join()
 
         assertTrue(syncer.syncState.value is SolanaKit.SyncState.NotSynced)
-        coVerify(exactly = 0) { storage.saveTokenTransferRepairCursor(any()) }
+        coVerify(exactly = 0) { storage.saveTokenTransferRepairCursor(any(), any()) }
     }
 
     @Test
@@ -654,7 +712,7 @@ class TransactionSyncerTest {
         syncJob.join()
 
         assertTrue(syncer.syncState.value is SolanaKit.SyncState.NotSynced)
-        coVerify(exactly = 0) { storage.saveTokenTransferRepairCursor(any()) }
+        coVerify(exactly = 0) { storage.saveTokenTransferRepairCursor(any(), any()) }
     }
 
     private fun newSyncer() = TransactionSyncer(
@@ -694,8 +752,10 @@ class TransactionSyncerTest {
 
     private fun backwardCursor() = cursors["history-backward-v1"]
 
+    private fun tokenAccount(address: String) = TokenAccount(address, MINT, BigDecimal.ONE, decimals = 6)
+
     private fun givenRepairBatch() {
-        coEvery { storage.tokenTransferTransactionHashes(any(), any(), any()) } returns
+        coEvery { storage.tokenTransferTransactionHashes(any(), any(), any(), any()) } returns
             listOf(TransactionKey(300, HASH_A), TransactionKey(200, HASH_B))
     }
 
@@ -733,8 +793,10 @@ class TransactionSyncerTest {
 
     private suspend fun respond(request: RpcRequest): RpcResponse<Any?> = when (request.method) {
         "getSignaturesForAddress" -> if (listingFails) rpcError() else RpcResponse(result = listing(request))
-        "getTokenAccountsByOwner" ->
+        "getTokenAccountsByOwner" -> {
+            discoveryRequests++
             if (discoveryFails) rpcError() else RpcResponse(result = tokenAccounts.map { SplTokenAccountWithPublicKey(it) })
+        }
         "getMultipleAccounts" -> mintAccountsResponse(checkNotNull(request.params).jsonArray[0].jsonArray.size)
         else -> rpcError()
     }
@@ -743,6 +805,7 @@ class TransactionSyncerTest {
     private fun listing(request: RpcRequest): List<RpcSignatureInformation> {
         listingRequests++
         val params = checkNotNull(request.params).jsonArray
+        listedStreams += params[0].jsonPrimitive.content
         val config = params[1].jsonObject
         val before = config["before"]?.jsonPrimitive?.contentOrNull?.let(::chainTx)
         val until = config["until"]?.jsonPrimitive?.contentOrNull?.let(::chainTx)
@@ -766,7 +829,7 @@ class TransactionSyncerTest {
     private fun mintAccounts(count: Int): RpcResponse<Any?> =
         if (count > 100) rpcError() else RpcResponse(result = List(count) { mintAccountValue() })
 
-    private fun mintAccountValue() = MintTokenAccountValue(
+    private fun mintAccountValue(owner: String = WellKnownPrograms.TOKEN_PROGRAM) = MintTokenAccountValue(
         data = MintTokenAccountInfo(
             parsed = MintTokenAccountInfoParsedData(
                 info = MintTokenAccountTokenInfo(decimals = 6, isInitialized = true, mintAuthority = "AUTHORITY", supply = "1000"),
@@ -774,7 +837,7 @@ class TransactionSyncerTest {
             ),
             program = "spl-token",
         ),
-        owner = TransactionSyncer.tokenProgramId,
+        owner = owner,
     )
 
     private suspend fun syncIgnoringCancellation() {
@@ -792,6 +855,7 @@ class TransactionSyncerTest {
         val MINT: String = Base58.encode(ByteArray(32) { 9 })
         val TOKEN_A: String = Base58.encode(ByteArray(32) { 3 })
         val TOKEN_B: String = Base58.encode(ByteArray(32) { 4 })
+        val TOKEN_2022_ACCOUNT: String = Base58.encode(ByteArray(32) { 5 })
         val chainOrder = compareBy<ChainTx>({ it.slot }, { it.position })
     }
 }

@@ -1,7 +1,6 @@
 package io.horizontalsystems.solanakit.transactions
 
 import com.solana.actions.Action
-import com.solana.actions.findSPLTokenDestinationAddress
 import com.solana.api.Api
 import com.solana.api.MultipleAccountsRequest
 import com.solana.core.Account
@@ -13,21 +12,12 @@ import com.solana.models.RpcSendTransactionConfig
 import com.solana.networking.Commitment
 import com.solana.networking.RpcRequest
 import com.solana.networking.makeRequestResult
-import com.solana.networking.serialization.serializers.base64.BorshAsBase64JsonArraySerializer
-import com.solana.networking.serialization.serializers.solana.AnchorAccountSerializer
 import com.solana.networking.serialization.serializers.solana.SolanaResponseSerializer
 import com.solana.programs.AssociatedTokenProgram
 import com.solana.programs.SystemProgram
 import com.solana.programs.TokenProgram
-import com.solana.vendor.ContResult
-import com.solana.vendor.ResultError
-import com.solana.vendor.flatMap
-import io.horizontalsystems.solanakit.models.AccountInfoFixed
 import io.horizontalsystems.solanakit.network.makeRequestResultWithRepeat
 import io.reactivex.Single
-import kotlinx.coroutines.CoroutineExceptionHandler
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -44,38 +34,6 @@ internal data class SignedSolanaTransactionData(
     val raw: ByteArray,
     val base64Encoded: String,
 )
-
-fun <T> Api.getMultipleAccountsFixed(
-    serializer: KSerializer<T>,
-    accounts: List<PublicKey>,
-): Single<List<AccountInfoFixed<T>?>> = Single.create { emitter ->
-    getMultipleAccounts(serializer, accounts) { result ->
-        result.onSuccess { emitter.onSuccess(it) }
-        result.onFailure { emitter.onError(it) }
-    }
-}
-
-fun <A> Api.getMultipleAccounts(
-    serializer: KSerializer<A>,
-    accounts: List<PublicKey>,
-    onComplete: ((Result<List<AccountInfoFixed<A>?>>) -> Unit)
-) {
-    CoroutineScope(dispatcher + CoroutineExceptionHandler { coroutineContext, throwable ->
-        onComplete(Result.failure(ResultError(throwable)))
-    }).launch {
-        getMultipleAccountsInfo(
-            serializer = serializer,
-            accounts
-        ).onSuccess {
-            val buffers = it.map { account ->
-                account
-            }
-            onComplete(Result.success(buffers))
-        }.onFailure {
-            onComplete(Result.failure(ResultError(it)))
-        }
-    }
-}
 
 @Serializable
 data class MintTokenAccountValue(
@@ -110,62 +68,42 @@ suspend fun Api.getMultipleMintAccountsInfo(
     commitment: String = "max",
     length: Int? = null,
     offset: Int? = length?.let { 0 }
-): Result<List<MintTokenAccountValue?>?> {
-    val values = mutableListOf<MintTokenAccountValue?>()
+): Result<List<MintTokenAccountValue?>?> =
+    getMultipleAccountsChunked(accounts, mintAccountsSerializer) { chunk ->
+        MultipleAccountsRequest(chunk, encoding, commitment, length, offset)
+    }
+
+// A closed mint account is answered with null.
+internal val mintAccountsSerializer = SolanaResponseSerializer(ListSerializer(MintTokenAccountValue.serializer().nullable))
+
+@Serializable
+internal data class AccountOwner(val owner: String)
+
+internal val accountOwnersSerializer = SolanaResponseSerializer(ListSerializer(AccountOwner.serializer().nullable))
+
+/** Owner program by account address, null for a missing account; an empty data slice skips the account data. */
+internal suspend fun Api.getAccountOwners(addresses: List<String>): Result<Map<String, String?>> =
+    getMultipleAccountsChunked(addresses.map { PublicKey(it) }, accountOwnersSerializer) { chunk ->
+        MultipleAccountsRequest(chunk, length = 0)
+    }.mapCatching { owners ->
+        addresses.zip(checkNotNull(owners) { "Empty getMultipleAccounts result" }.map { it?.owner }).toMap()
+    }
+
+private suspend inline fun <reified T> Api.getMultipleAccountsChunked(
+    accounts: List<PublicKey>,
+    serializer: KSerializer<List<T>?>,
+    request: (List<String>) -> MultipleAccountsRequest,
+): Result<List<T>?> {
+    val values = mutableListOf<T>()
     for (chunk in accounts.chunked(MAX_MULTIPLE_ACCOUNTS)) {
-        val result = router.makeRequestResultWithRepeat(
-            request = MultipleAccountsRequest(
-                accounts = chunk.map { Base58.encode(it.pubkey) },
-                encoding = encoding,
-                commitment = commitment,
-                length = length,
-                offset = offset
-            ),
-            serializer = mintAccountsSerializer
-        )
+        val result = router.makeRequestResultWithRepeat(request(chunk.map { Base58.encode(it.pubkey) }), serializer)
         values += result.getOrElse { return Result.failure(it) } ?: return Result.success(null)
     }
     return Result.success(values)
 }
 
-// A closed mint account is answered with null.
-internal val mintAccountsSerializer = SolanaResponseSerializer(ListSerializer(MintTokenAccountValue.serializer().nullable))
-
 // RPC limit of getMultipleAccounts.
 private const val MAX_MULTIPLE_ACCOUNTS = 100
-
-suspend fun <A> Api.getMultipleAccountsInfo(
-    serializer: KSerializer<A>,
-    accounts: List<PublicKey>,
-    encoding: RpcSendTransactionConfig.Encoding = RpcSendTransactionConfig.Encoding.base64,
-    commitment: String = "max",
-    length: Int? = null,
-    offset: Int? = length?.let { 0 }
-): Result<List<AccountInfoFixed<A>?>> =
-    router.makeRequestResultWithRepeat(
-        request = MultipleAccountsRequest(
-            accounts = accounts.map { Base58.encode(it.pubkey) },
-            encoding = encoding,
-            commitment = commitment,
-            length = length,
-            offset = offset
-        ),
-        serializer = MultipleAccountsSerializer(serializer)
-    ).let { result ->
-        @Suppress("UNCHECKED_CAST")
-        if (result.isSuccess && result.getOrNull() == null) Result.success(listOf())
-        else result as Result<List<AccountInfoFixed<A>?>> // safe cast, null case handled above
-    }
-
-internal fun <A> MultipleAccountsSerializer(serializer: KSerializer<A>) =
-    MultipleAccountsInfoSerializer(
-        BorshAsBase64JsonArraySerializer(
-            AnchorAccountSerializer(serializer.descriptor.serialName, serializer)
-        )
-    )
-
-private fun <D> MultipleAccountsInfoSerializer(serializer: KSerializer<D>) =
-    SolanaResponseSerializer(ListSerializer(AccountInfoFixed.serializer(serializer).nullable))
 
 internal fun Action.signSOL(
     account: Account,
@@ -184,61 +122,31 @@ internal fun Action.signSOL(
     transaction.signAndSerialize(account, recentBlockHash)
 }
 
-internal fun Action.signSPLTokens(
-    mintAddress: PublicKey,
-    decimals: Int,
-    fromPublicKey: PublicKey,
-    destinationAddress: PublicKey,
+internal fun signSPLTokens(
+    transfer: SplTransfer,
     amount: Long,
-    allowUnfundedRecipient: Boolean = false,
     account: Account,
     instructions: List<TransactionInstruction>,
     recentBlockHash: String
-) = Single.create { emitter ->
-    ContResult { cb ->
-        this.findSPLTokenDestinationAddress(
-            mintAddress,
-            destinationAddress,
-            allowUnfundedRecipient
-        ) { cb(it) }
-    }.flatMap { spl ->
-        val toPublicKey = spl.first
-        val unregisteredAssociatedToken = spl.second
-        if (Base58.encode(fromPublicKey.pubkey) == Base58.encode(toPublicKey.pubkey)) {
-            return@flatMap ContResult.failure(ResultError("Same send and destination address."))
-        }
-        val transaction = splTransferTransaction(
-            mintAddress = mintAddress,
-            decimals = decimals,
-            source = fromPublicKey,
-            destination = toPublicKey,
-            destinationOwner = destinationAddress,
-            createDestination = unregisteredAssociatedToken,
-            amount = amount,
-            owner = account.publicKey,
-            instructions = instructions,
-        )
-        return@flatMap ContResult.success(transaction)
-    }.run { result ->
-        result.onSuccess { transaction ->
-            try {
-                emitter.onSuccess(transaction.signAndSerialize(account, recentBlockHash))
-            } catch (error: Throwable) {
-                emitter.onError(error)
-            }
-        }.onFailure {
-            emitter.onError(it)
-        }
-    }
+): SignedSolanaTransactionData {
+    require(transfer.source.toBase58() != transfer.destination.toBase58()) { "Same send and destination address." }
+    return splTransferTransaction(transfer, amount, account.publicKey, instructions)
+        .signAndSerialize(account, recentBlockHash)
 }
 
+/** Accounts of one SPL transfer; [programId] is the token program that owns the mint's accounts. */
+internal class SplTransfer(
+    val programId: PublicKey,
+    val mint: PublicKey,
+    val decimals: Int,
+    val source: PublicKey,
+    val destination: PublicKey,
+    val destinationOwner: PublicKey,
+    val createDestination: Boolean,
+)
+
 internal fun splTransferTransaction(
-    mintAddress: PublicKey,
-    decimals: Int,
-    source: PublicKey,
-    destination: PublicKey,
-    destinationOwner: PublicKey,
-    createDestination: Boolean,
+    transfer: SplTransfer,
     amount: Long,
     owner: PublicKey,
     instructions: List<TransactionInstruction>,
@@ -246,18 +154,23 @@ internal fun splTransferTransaction(
     if (instructions.isNotEmpty()) {
         add(*instructions.toTypedArray())
     }
-    if (createDestination) {
+    if (transfer.createDestination) {
         add(
             AssociatedTokenProgram.createAssociatedTokenAccountInstruction(
-                mint = mintAddress,
-                associatedAccount = destination,
-                owner = destinationOwner,
+                programId = transfer.programId,
+                mint = transfer.mint,
+                associatedAccount = transfer.destination,
+                owner = transfer.destinationOwner,
                 payer = owner
             )
         )
     }
     // Ledger's Solana app never parses the deprecated Transfer, so only TransferChecked signs in clear.
-    add(TokenProgram.transferChecked(source, destination, amount, decimals.toByte(), owner, mintAddress))
+    val transferChecked = TokenProgram.transferChecked(
+        transfer.source, transfer.destination, amount, transfer.decimals.toByte(), owner, transfer.mint
+    )
+    // Token-2022 keeps the TransferChecked layout of the legacy program.
+    add(transferChecked.copy(programId = transfer.programId))
 }
 
 internal suspend fun Api.sendRawTransactionWithoutRetries(transaction: ByteArray): Result<String> {

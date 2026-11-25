@@ -7,6 +7,7 @@ import com.solana.api.Status
 import com.solana.api.TokenAmountInfo
 import com.solana.api.TokenBalance
 import io.horizontalsystems.solanakit.SolanaKit
+import io.horizontalsystems.solanakit.database.transaction.TokenTransferRepair
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.database.transaction.dao.TransactionsDao.TransactionKey
 import io.horizontalsystems.solanakit.models.FullTokenTransfer
@@ -14,6 +15,7 @@ import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.MintAccount
 import io.horizontalsystems.solanakit.models.TokenTransfer
 import io.horizontalsystems.solanakit.models.Transaction
+import io.horizontalsystems.solanakit.noderpc.endpoints.RpcSignatureInformation
 import io.horizontalsystems.solanakit.transactions.SolanaTransactionMapper
 import io.horizontalsystems.solanakit.transactions.TransactionManager
 import io.horizontalsystems.solanakit.transactions.TransactionResult
@@ -41,6 +43,7 @@ class TokenTransferRepairDesktopTest {
     val tmp = TemporaryFolder()
 
     private val rpcTransactions = mutableMapOf<String, TransactionResult>()
+    private val node = FakeRpcRouter(rpcTransactions)
     private lateinit var kit: SyncerFixture
     private lateinit var storage: TransactionStorage
     private lateinit var transactionManager: TransactionManager
@@ -48,7 +51,7 @@ class TokenTransferRepairDesktopTest {
 
     @Before
     fun setUp() {
-        kit = SyncerFixture(tmp.root, "Solana-repair", USER, FakeRpcRouter(rpcTransactions))
+        kit = SyncerFixture(tmp.root, "Solana-repair", USER, node)
         storage = kit.storage
         transactionManager = kit.transactionManager
         syncer = kit.syncer
@@ -70,13 +73,13 @@ class TokenTransferRepairDesktopTest {
 
         assertEquals(
             listOf(TransactionKey(300, "hashA"), TransactionKey(200, "hashC"), TransactionKey(200, "hashB")),
-            storage.tokenTransferTransactionHashes(null, null, -1),
+            storage.tokenTransferTransactionHashes(TokenTransferRepair.ByOwner, null, null, -1),
         )
         assertEquals(
             listOf(TransactionKey(300, "hashA"), TransactionKey(200, "hashC")),
-            storage.tokenTransferTransactionHashes(null, null, 2),
+            storage.tokenTransferTransactionHashes(TokenTransferRepair.ByOwner, null, null, 2),
         )
-        assertEquals(listOf(TransactionKey(200, "hashB")), storage.tokenTransferTransactionHashes(200, "hashC", 2))
+        assertEquals(listOf(TransactionKey(200, "hashB")), storage.tokenTransferTransactionHashes(TokenTransferRepair.ByOwner, 200, "hashC", 2))
     }
 
     @Test
@@ -87,6 +90,58 @@ class TokenTransferRepairDesktopTest {
 
         assertEquals(listOf("qaHash"), storage.getSplTransactions(MINT, true, null, null).map { it.transaction.hash })
         assertTrue(storage.getSplTransactions(MINT, false, null, null).isEmpty())
+    }
+
+    @Test
+    fun tokenTransferTransactionHashes_token2022Source_returnsConfirmedRowsWithoutSolAmount() = runBlocking {
+        storeLegacyTransfer("tokenHash", timestamp = 300)
+        storeWithoutTransfers("droppedHash", timestamp = 200)
+        storeWithoutTransfers("pendingHash", timestamp = 250, pending = true)
+        storage.addTransactions(listOf(FullTransaction(Transaction("solHash", 270, amount = BigDecimal.ONE, pending = false), emptyList())))
+
+        assertEquals(
+            listOf(TransactionKey(300, "tokenHash"), TransactionKey(200, "droppedHash")),
+            storage.tokenTransferTransactionHashes(TokenTransferRepair.Token2022, null, null, -1),
+        )
+    }
+
+    @Test
+    fun sync_token2022IncomingTransfer_storedWithTokenTransfer() = runBlocking {
+        node.history += RpcSignatureInformation(signature = "t22Hash", confirmationStatus = "finalized", slot = 1, blockTime = 1_700_000_000)
+        rpcTransactions["t22Hash"] = incomingTransfer("t22Hash", blockTime = 1_700_000_000, mint = TOKEN_2022_MINT)
+
+        syncer.sync()
+
+        val tokenTransfer = storage.getFullTransactions(listOf("t22Hash")).single().tokenTransfers.single().tokenTransfer
+        assertEquals(TOKEN_2022_MINT, tokenTransfer.mintAddress)
+        assertTrue(tokenTransfer.incoming)
+    }
+
+    @Test
+    fun sync_storedRowWithDroppedToken2022Transfer_gainsTransferAndRepairCompletes() = runBlocking {
+        // History rows are stored with their block time.
+        storeWithoutTransfers("droppedHash", timestamp = 1_700_000_000)
+        rpcTransactions["droppedHash"] = incomingTransfer("droppedHash", blockTime = 1_700_000_000, mint = TOKEN_2022_MINT)
+
+        repeat(3) { syncer.sync() }
+
+        val tokenTransfer = storage.getFullTransactions(listOf("droppedHash")).single().tokenTransfers.single().tokenTransfer
+        assertEquals(TOKEN_2022_MINT, tokenTransfer.mintAddress)
+        assertTrue(tokenTransfer.incoming)
+        assertEquals("done", storage.tokenTransferRepairCursor(TokenTransferRepair.Token2022))
+        assertEquals(1, node.transactionRequests.count { it == "droppedHash" })
+    }
+
+    @Test
+    fun sync_swapStoredWithLegacyLegOnly_gainsToken2022LegAndKeepsLegacyLeg() = runBlocking {
+        storeLegacyTransfer("swapHash", timestamp = 1_700_000_100)
+        storage.saveTokenTransferRepairCursor(TokenTransferRepair.ByOwner, "done")
+        rpcTransactions["swapHash"] = swapToToken2022("swapHash", blockTime = 1_700_000_000)
+
+        syncer.sync()
+
+        val legs = storage.getFullTransactions(listOf("swapHash")).single().tokenTransfers.map { it.tokenTransfer }
+        assertEquals(setOf(MINT to false, TOKEN_2022_MINT to true), legs.map { it.mintAddress to it.incoming }.toSet())
     }
 
     @Test
@@ -118,7 +173,7 @@ class TokenTransferRepairDesktopTest {
         rpcTransactions["hashC"] = incomingTransfer("hashC", blockTime = 195)
 
         syncer.sync()
-        assertEquals("200:hashB", storage.tokenTransferRepairCursor())
+        assertEquals("200:hashB", storage.tokenTransferRepairCursor(TokenTransferRepair.ByOwner))
         assertFalse(isIncoming("hashC"))
 
         syncer.sync()
@@ -177,13 +232,13 @@ class TokenTransferRepairDesktopTest {
 
     @Test
     fun sync_ownedChangeOfMintWithoutMetadata_keepsStoredTokenTransfer() = runBlocking {
-        storeLegacyTransfer("token2022Hash", timestamp = 1_700_000_100, mint = TOKEN_2022_MINT)
-        rpcTransactions["token2022Hash"] = incomingTransfer("token2022Hash", blockTime = 1_700_000_000, mint = TOKEN_2022_MINT)
+        storeLegacyTransfer("foreignHash", timestamp = 1_700_000_100, mint = FOREIGN_MINT)
+        rpcTransactions["foreignHash"] = incomingTransfer("foreignHash", blockTime = 1_700_000_000, mint = FOREIGN_MINT)
 
         syncer.sync()
 
-        val tokenTransfer = storage.getFullTransactions(listOf("token2022Hash")).single().tokenTransfers.single().tokenTransfer
-        assertEquals(TOKEN_2022_MINT, tokenTransfer.mintAddress)
+        val tokenTransfer = storage.getFullTransactions(listOf("foreignHash")).single().tokenTransfers.single().tokenTransfer
+        assertEquals(FOREIGN_MINT, tokenTransfer.mintAddress)
         assertFalse(tokenTransfer.incoming)
     }
 
@@ -195,7 +250,7 @@ class TokenTransferRepairDesktopTest {
         syncer.sync()
 
         assertEquals(1, storage.getFullTransactions(listOf("noOwnerHash")).single().tokenTransfers.size)
-        assertEquals("1700000100:noOwnerHash", storage.tokenTransferRepairCursor())
+        assertEquals("1700000100:noOwnerHash", storage.tokenTransferRepairCursor(TokenTransferRepair.ByOwner))
     }
 
     @Test
@@ -220,7 +275,7 @@ class TokenTransferRepairDesktopTest {
         val stored = storage.getFullTransactions(listOf("noMetaHash")).single()
         assertEquals(storedHeader, stored.transaction)
         assertEquals(1, stored.tokenTransfers.size)
-        assertEquals("1700000100:noMetaHash", storage.tokenTransferRepairCursor())
+        assertEquals("1700000100:noMetaHash", storage.tokenTransferRepairCursor(TokenTransferRepair.ByOwner))
     }
 
     @Test
@@ -278,6 +333,23 @@ class TokenTransferRepairDesktopTest {
         val transaction = Transaction(hash, timestamp, from = "SENDER", to = "USER_ATA", pending = pending, external = external)
         val tokenTransfer = TokenTransfer(hash, mint, incoming = false, amount = BigDecimal(TRANSFER_AMOUNT))
         storage.addTransactions(listOf(FullTransaction(transaction, listOf(FullTokenTransfer(tokenTransfer, MintAccount(mint, 6))))))
+    }
+
+    // A token transaction stored while its only mint was not accepted: no SOL amount, no token transfer.
+    private suspend fun storeWithoutTransfers(hash: String, timestamp: Long, pending: Boolean = false) {
+        storage.addTransactions(listOf(FullTransaction(Transaction(hash, timestamp, from = "SENDER", to = USER, pending = pending), emptyList())))
+    }
+
+    // The user sells MINT for TOKEN_2022_MINT; both token accounts are theirs.
+    private fun swapToToken2022(hash: String, blockTime: Long): TransactionResult {
+        val result = incomingTransfer(hash, blockTime, mint = TOKEN_2022_MINT)
+        val meta = checkNotNull(result.meta)
+        return result.copy(
+            meta = meta.copy(
+                preTokenBalances = meta.preTokenBalances.orEmpty() + tokenBalance(MINT, accountIndex = 3, owner = USER, amount = 5_000),
+                postTokenBalances = meta.postTokenBalances.orEmpty() + tokenBalance(MINT, accountIndex = 3, owner = USER, amount = 0),
+            ),
+        )
     }
 
     private fun incomingTransfer(
@@ -362,6 +434,7 @@ class TokenTransferRepairDesktopTest {
         val MINT: String = Base58.encode(ByteArray(32) { 9 })
         val MINT_ACCOUNT = MintAccount(MINT, decimals = 6)
         val TOKEN_2022_MINT = FakeRpcRouter.TOKEN_2022_MINT
+        val FOREIGN_MINT = FakeRpcRouter.FOREIGN_MINT
         const val TRANSFER_AMOUNT = 1_000_047L
         const val SOL_AMOUNT = 1_000_000L
     }

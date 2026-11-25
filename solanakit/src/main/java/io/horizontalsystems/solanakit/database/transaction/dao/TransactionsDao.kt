@@ -41,13 +41,18 @@ interface TransactionsDao {
         """
         SELECT timestamp, hash FROM `Transaction`
         WHERE NOT pending AND NOT external
-        AND hash IN (SELECT transactionHash FROM TokenTransfer)
+        AND CASE WHEN :withoutAmount THEN amount IS NULL ELSE hash IN (SELECT transactionHash FROM TokenTransfer) END
         AND (:beforeTimestamp IS NULL OR timestamp < :beforeTimestamp OR (timestamp = :beforeTimestamp AND hash < :beforeHash))
         ORDER BY timestamp DESC, hash DESC
         LIMIT :limit
         """
     )
-    suspend fun tokenTransferTransactionKeys(beforeTimestamp: Long?, beforeHash: String?, limit: Int): List<TransactionKey>
+    suspend fun tokenTransferTransactionKeys(
+        withoutAmount: Boolean,
+        beforeTimestamp: Long?,
+        beforeHash: String?,
+        limit: Int,
+    ): List<TransactionKey>
 
     data class TransactionKey(val timestamp: Long, val hash: String)
 

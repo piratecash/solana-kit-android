@@ -2,18 +2,18 @@ package io.horizontalsystems.solanakit.core
 
 import com.solana.api.Api
 import com.solana.core.PublicKey
-import org.sol4k.Base58
-import com.solana.models.buffer.AccountInfoData
 import getTokenAccountBalanceWithRepeat
 import getParsedTokenAccountsByOwner
 import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.database.main.MainStorage
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
-import io.horizontalsystems.solanakit.models.AccountInfoFixed
 import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.MintAccount
 import io.horizontalsystems.solanakit.models.TokenAccount
-import io.horizontalsystems.solanakit.transactions.getMultipleAccountsFixed
+import io.horizontalsystems.solanakit.transactions.WellKnownPrograms
+import io.horizontalsystems.solanakit.transactions.associatedTokenAddress
+import io.horizontalsystems.solanakit.transactions.getAccountOwners
+import io.horizontalsystems.solanakit.transactions.isTokenAccount
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -22,7 +22,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.rx2.await
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -97,8 +96,10 @@ class TokenAccountManager(
 
     @Throws(Exception::class)
     private suspend fun fetchTokenAccounts(walletAddress: String) {
-        val parsedAccounts = rpcClient.getParsedTokenAccountsByOwner(PublicKey.valueOf(walletAddress))
-            .getOrThrow()
+        val owner = PublicKey.valueOf(walletAddress)
+        val parsedAccounts = WellKnownPrograms.TOKEN_PROGRAMS.flatMap { programId ->
+            rpcClient.getParsedTokenAccountsByOwner(owner, programId).getOrThrow()
+        }
         val tokenAccounts = parsedAccounts.map { it.toTokenAccount() }
         val mintAccounts = parsedAccounts.map { it.toMintAccount() }
 
@@ -126,13 +127,8 @@ class TokenAccountManager(
             return
         }
 
-        val publicKeys = tokenAccounts.map { PublicKey.valueOf(it.address) }
         try {
-            val result = rpcClient.getMultipleAccountsFixed(
-                serializer = AccountInfoData.serializer(),
-                accounts = publicKeys
-            ).await()
-            handleBalance(tokenAccounts, result, initialSync)
+            handleBalance(liveTokenAccounts(tokenAccounts), initialSync)
         } catch (error: Throwable) {
             syncState = SolanaKit.SyncState.NotSynced(error)
         }
@@ -159,26 +155,40 @@ class TokenAccountManager(
 
     fun tokenAccounts(): List<FullTokenAccount> = fullTokenAccounts
 
-    private suspend fun handleBalance(
-        tokenAccounts: List<TokenAccount>,
-        tokenAccountsBufferInfo: List<AccountInfoFixed<AccountInfoData>?>,
-        initialSync: Boolean
-    ) {
-        val updatedTokenAccounts = mutableListOf<TokenAccount>()
+    /**
+     * Accounts that exist on chain. A Token-2022 mint enabled offline is stored under its legacy-derived ATA,
+     * so that row also asks for the Token-2022 ATA in the same request and is moved there once it exists.
+     */
+    private suspend fun liveTokenAccounts(tokenAccounts: List<TokenAccount>): List<TokenAccount> {
+        val candidates = tokenAccounts.filter { it.isEmptyLegacyAta() }.associateWith {
+            associatedTokenAddress(walletAddress, it.mintAddress, WellKnownPrograms.TOKEN_2022_PROGRAM)
+        }
+        val addresses = (tokenAccounts.map { it.address } + candidates.values).distinct()
+        val owners = rpcClient.getAccountOwners(addresses).getOrThrow()
 
-        for ((index, tokenAccount) in tokenAccounts.withIndex()) {
-            tokenAccountsBufferInfo[index]?.let { account ->
-                val balance = rpcClient.getTokenAccountBalanceWithRepeat(PublicKey.valueOf(tokenAccount.address))
-                    .getOrNull()?.amount ?: "0"
-                updatedTokenAccounts.add(
-                    TokenAccount(
-                        address = tokenAccount.address,
-                        mintAddress = tokenAccount.mintAddress,
-                        balance = balance.toBigDecimal(),
-                        decimals = tokenAccount.decimals
-                    )
-                )
-            }
+        return tokenAccounts.mapNotNull { tokenAccount ->
+            if (isTokenAccount(owners[tokenAccount.address])) return@mapNotNull tokenAccount
+            val actualAddress = candidates[tokenAccount]
+                ?.takeIf { owners[it] == WellKnownPrograms.TOKEN_2022_PROGRAM } ?: return@mapNotNull null
+            val actual = TokenAccount(actualAddress, tokenAccount.mintAddress, tokenAccount.balance, tokenAccount.decimals)
+            persistAndRefreshMirror(emitUpdate = false) { storage.replaceTokenAccount(tokenAccount.address, actual) }
+            actual
+        }.distinctBy { it.address }
+    }
+
+    private fun TokenAccount.isEmptyLegacyAta() = balance.signum() == 0 &&
+        address == associatedTokenAddress(walletAddress, mintAddress, WellKnownPrograms.TOKEN_PROGRAM)
+
+    private suspend fun handleBalance(tokenAccounts: List<TokenAccount>, initialSync: Boolean) {
+        val updatedTokenAccounts = tokenAccounts.map { tokenAccount ->
+            val balance = rpcClient.getTokenAccountBalanceWithRepeat(PublicKey.valueOf(tokenAccount.address))
+                .getOrNull()?.amount ?: "0"
+            TokenAccount(
+                address = tokenAccount.address,
+                mintAddress = tokenAccount.mintAddress,
+                balance = balance.toBigDecimal(),
+                decimals = tokenAccount.decimals
+            )
         }
 
         persistAndRefreshMirror(emitUpdate = true) { storage.saveTokenAccounts(updatedTokenAccounts) }
@@ -200,7 +210,8 @@ class TokenAccountManager(
     }
 
     suspend fun addTokenAccount(walletAddress: String, mintAddress: String, decimals: Int) {
-        val userTokenMintAddress = associatedTokenAddress(walletAddress, mintAddress)
+        // Offline: a Token-2022 mint gets the legacy-derived address here and is moved by the next sync.
+        val userTokenMintAddress = associatedTokenAddress(walletAddress, mintAddress, WellKnownPrograms.TOKEN_PROGRAM)
         val tokenAccount = TokenAccount(
             address = userTokenMintAddress,
             mintAddress = mintAddress,
@@ -212,15 +223,4 @@ class TokenAccountManager(
             storage.addTokenAccountIfMissing(tokenAccount, MintAccount(mintAddress, decimals))
         }
     }
-
-    private fun associatedTokenAddress(
-        walletAddress: String,
-        tokenMintAddress: String
-    ): String {
-        return PublicKey.associatedTokenAddress(
-            walletAddress = PublicKey(walletAddress),
-            tokenMintAddress = PublicKey(tokenMintAddress)
-        ).address.pubkey.let { Base58.encode(it) }
-    }
-
 }

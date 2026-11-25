@@ -6,6 +6,7 @@ import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.models.FullTokenTransfer
 import io.horizontalsystems.solanakit.models.FullTransaction
 import io.horizontalsystems.solanakit.models.MintAccount
+import io.horizontalsystems.solanakit.models.TokenAccount
 import io.horizontalsystems.solanakit.models.TokenTransfer
 import io.horizontalsystems.solanakit.models.Transaction
 import kotlinx.coroutines.runBlocking
@@ -88,6 +89,30 @@ class TransactionStorageAtomicityDesktopTest {
         assertEquals(0, BigDecimal(2).compareTo(tokenTransfer.amount))
     }
 
+    @Test
+    fun replaceTokenAccount_staleRow_mintResolvesToActualAccount() = runBlocking {
+        storage.addTokenAccountIfMissing(tokenAccount(STALE_ADDRESS, BigDecimal.ZERO), MintAccount(MINT_ADDRESS, 6))
+
+        storage.replaceTokenAccount(STALE_ADDRESS, tokenAccount(ACTUAL_ADDRESS, BigDecimal.ZERO))
+
+        assertEquals(listOf(ACTUAL_ADDRESS), storage.getTokenAccounts().map { it.address })
+        assertEquals(ACTUAL_ADDRESS, storage.getFullTokenAccount(MINT_ADDRESS)?.tokenAccount?.address)
+    }
+
+    @Test
+    fun replaceTokenAccount_actualRowAlreadyStored_keepsItsBalance() = runBlocking {
+        storage.saveTokenAccounts(
+            listOf(tokenAccount(STALE_ADDRESS, BigDecimal.ZERO), tokenAccount(ACTUAL_ADDRESS, BigDecimal.TEN)),
+            listOf(MintAccount(MINT_ADDRESS, 6)),
+        )
+
+        storage.replaceTokenAccount(STALE_ADDRESS, tokenAccount(ACTUAL_ADDRESS, BigDecimal.ZERO))
+
+        assertEquals(listOf(ACTUAL_ADDRESS to 0), storage.getTokenAccounts().map { it.address to BigDecimal.TEN.compareTo(it.balance) })
+    }
+
+    private fun tokenAccount(address: String, balance: BigDecimal) = TokenAccount(address, MINT_ADDRESS, balance, decimals = 6)
+
     private fun transaction(hash: String) = Transaction(hash = hash, timestamp = 1_700_000_000)
 
     private companion object {
@@ -98,5 +123,7 @@ class TransactionStorageAtomicityDesktopTest {
         const val FIRST_HASH = "atomicityFirstTransactionHash11111111111111"
         const val SECOND_HASH = "atomicitySecondTransactionHash1111111111111"
         const val MISSING_HASH = "atomicityMissingTransactionHash111111111111"
+        const val STALE_ADDRESS = "staleLegacyDerivedTokenAccount1111111111111"
+        const val ACTUAL_ADDRESS = "actualToken2022TokenAccount111111111111111"
     }
 }

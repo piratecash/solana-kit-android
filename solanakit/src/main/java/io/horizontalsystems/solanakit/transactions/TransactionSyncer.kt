@@ -4,10 +4,9 @@ import SplTokenAccountWithPublicKey
 import co.touchlab.kermit.Logger
 import com.solana.api.Api
 import com.solana.core.PublicKey
-import org.sol4k.Base58
-import com.solana.programs.TokenProgram
 import getTokenAccountsByOwner
 import io.horizontalsystems.solanakit.SolanaKit
+import io.horizontalsystems.solanakit.database.transaction.TokenTransferRepair
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
 import io.horizontalsystems.solanakit.database.transaction.dao.TransactionsDao.TransactionKey
 import io.horizontalsystems.solanakit.models.FullTransaction
@@ -100,7 +99,7 @@ class TransactionSyncer(
     // A listing failure throws and leaves every cursor in place; a fetch that stops ends the pass quietly.
     private suspend fun syncHistory() {
         fetcher.startPass()
-        val streams = listOf(userAddress) + getTokenAccountsByOwner().map { it.publicKey }
+        val streams = (listOf(userAddress) + getTokenAccountsByOwner().map { it.publicKey } + storedTokenStreams()).distinct()
         if (syncForward(streams) && syncBackward(streams) && fetcher.hasBudget()) {
             repairStoredTokenTransfers()
         }
@@ -237,12 +236,17 @@ class TransactionSyncer(
     }
 
     private suspend fun repairNextTokenTransferBatch() {
-        val cursor = storage.tokenTransferRepairCursor()
-        if (cursor == DONE) return
+        for (repair in TokenTransferRepair.entries) {
+            val cursor = storage.tokenTransferRepairCursor(repair)
+            if (cursor != DONE) return repairNextBatch(repair, cursor)
+        }
+    }
+
+    private suspend fun repairNextBatch(repair: TokenTransferRepair, cursor: String?) {
         val position = parseRepairCursor(cursor)
-        val batch = storage.tokenTransferTransactionHashes(position?.timestamp, position?.hash, REPAIR_BATCH)
+        val batch = storage.tokenTransferTransactionHashes(repair, position?.timestamp, position?.hash, REPAIR_BATCH)
         if (batch.isEmpty()) {
-            storage.saveTokenTransferRepairCursor(DONE)
+            storage.saveTokenTransferRepairCursor(repair, DONE)
             return
         }
 
@@ -259,7 +263,7 @@ class TransactionSyncer(
             replaceTokenTransfersOf = SolanaTransactionMapper.hashesWithoutUserTokenChanges(userAddress, results),
         )
         fetcher.release(processed.map { it.hash })
-        storage.saveTokenTransferRepairCursor("${lastProcessed.timestamp}:${lastProcessed.hash}")
+        storage.saveTokenTransferRepairCursor(repair, "${lastProcessed.timestamp}:${lastProcessed.hash}")
     }
 
     private fun TransactionResult.withFallbackBlockTime(fallback: Long?) =
@@ -270,6 +274,11 @@ class TransactionSyncer(
         val hash = cursor.substringAfter(':', missingDelimiterValue = "")
         return if (hash.isEmpty()) null else TransactionKey(timestamp, hash)
     }
+
+    // Token-2022 accounts: the per-pass discovery lists the legacy program only.
+    private suspend fun storedTokenStreams(): List<String> = storage.getTokenAccounts()
+        .filter { it.address != associatedTokenAddress(userAddress, it.mintAddress, WellKnownPrograms.TOKEN_PROGRAM) }
+        .map { it.address }
 
     // A discovery failure fails the pass: an empty list would hide every token account's history.
     private suspend fun getTokenAccountsByOwner(): List<SplTokenAccountWithPublicKey> {
@@ -322,7 +331,7 @@ class TransactionSyncer(
             ).getOrThrow()?.forEachIndexed { index, account ->
                 val owner = account?.owner
                 val mint = account?.data
-                if (owner != tokenProgramId || mint == null) return@forEachIndexed
+                if (owner !in WellKnownPrograms.TOKEN_PROGRAMS || mint == null) return@forEachIndexed
                 val mintAddress = addresses.getOrNull(index) ?: return@forEachIndexed
 
                 val isNft = when {
@@ -346,7 +355,6 @@ class TransactionSyncer(
     }
 
     companion object {
-        val tokenProgramId = Base58.encode(TokenProgram.PROGRAM_ID.pubkey)
         const val rpcSignaturesCount = 1000
         private const val REPAIR_BATCH = 20
         private const val WINDOW_GROUPS = 100

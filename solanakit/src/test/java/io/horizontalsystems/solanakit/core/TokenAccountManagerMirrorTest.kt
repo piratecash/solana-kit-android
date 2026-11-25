@@ -2,23 +2,21 @@ package io.horizontalsystems.solanakit.core
 
 import com.solana.api.Api
 import com.solana.api.TokenAmountInfoResponse
-import com.solana.models.buffer.AccountInfoData
 import getTokenAccountBalanceWithRepeat
 import io.horizontalsystems.solanakit.SolanaKit
 import io.horizontalsystems.solanakit.database.main.MainStorage
 import io.horizontalsystems.solanakit.database.transaction.TransactionStorage
-import io.horizontalsystems.solanakit.models.AccountInfoFixed
 import io.horizontalsystems.solanakit.models.FullTokenAccount
 import io.horizontalsystems.solanakit.models.MintAccount
 import io.horizontalsystems.solanakit.models.TokenAccount
-import io.horizontalsystems.solanakit.transactions.getMultipleAccountsFixed
+import io.horizontalsystems.solanakit.transactions.WellKnownPrograms
+import io.horizontalsystems.solanakit.transactions.getAccountOwners
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
-import io.reactivex.Single
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -85,9 +83,8 @@ class TokenAccountManagerMirrorTest {
     @Test
     fun sync_newBalance_mirrorReturnsNewBalance() = runBlocking {
         coEvery { storage.getTokenAccounts() } returns listOf(tokenAccount)
-        every {
-            rpcClient.getMultipleAccountsFixed<AccountInfoData>(any(), any())
-        } returns Single.just(listOf(mockk<AccountInfoFixed<AccountInfoData>>()))
+        coEvery { rpcClient.getAccountOwners(any()) } returns
+            Result.success(mapOf(tokenAccountAddress to WellKnownPrograms.TOKEN_PROGRAM))
         coEvery { rpcClient.getTokenAccountBalanceWithRepeat(any()) } returns Result.success(
             mockk<TokenAmountInfoResponse> { every { amount } returns syncedBalance }
         )
@@ -187,9 +184,8 @@ class TokenAccountManagerMirrorTest {
 
     private fun stubBalanceSync() {
         coEvery { storage.getTokenAccounts() } returns listOf(tokenAccount)
-        every {
-            rpcClient.getMultipleAccountsFixed<AccountInfoData>(any(), any())
-        } returns Single.just(listOf(mockk<AccountInfoFixed<AccountInfoData>>()))
+        coEvery { rpcClient.getAccountOwners(any()) } returns
+            Result.success(mapOf(tokenAccountAddress to WellKnownPrograms.TOKEN_PROGRAM))
         coEvery { rpcClient.getTokenAccountBalanceWithRepeat(any()) } returns Result.success(
             mockk<TokenAmountInfoResponse> { every { amount } returns syncedBalance }
         )

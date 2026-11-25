@@ -252,7 +252,6 @@ class TransactionManager(
     ): SignedRawSolanaTransaction {
         val mintAddressString = Base58.encode(mintAddress.publicKey.pubkey)
         return signedSplTransaction(
-            mintAddress = mintAddress,
             toAddress = toAddress,
             amount = amount,
             signerAccount = signerAccount,
@@ -270,7 +269,6 @@ class TransactionManager(
         val fullTokenAccount = fullTokenAccount(mintAddressString)
         val mintAccount = fullTokenAccount.mintAccount
         val signedTransaction = signedSplTransaction(
-            mintAddress = mintAddress,
             toAddress = toAddress,
             amount = amount,
             signerAccount = signerAccount,
@@ -310,28 +308,44 @@ class TransactionManager(
     }
 
     private suspend fun signedSplTransaction(
-        mintAddress: Address,
         toAddress: Address,
         amount: Long,
         signerAccount: Account,
         fullTokenAccount: FullTokenAccount,
     ): SignedRawSolanaTransaction {
-        val tokenAccount = fullTokenAccount.tokenAccount
+        val transfer = splTransfer(fullTokenAccount, toAddress.publicKey.toBase58())
         val blockHash = latestBlockhash()
 
-        val signedTransaction = rpcAction.signSPLTokens(
-            mintAddress = mintAddress.publicKey,
-            decimals = fullTokenAccount.mintAccount.decimals,
-            fromPublicKey = PublicKey(tokenAccount.address),
-            destinationAddress = toAddress.publicKey,
+        val signedTransaction = signSPLTokens(
+            transfer = transfer,
             amount = amount,
             account = signerAccount,
-            allowUnfundedRecipient = true,
             instructions = if (signerAccount.supportsPriorityFees) priorityFeeInstructions() else emptyList(),
             recentBlockHash = blockHash.blockhash
-        ).await()
+        )
 
         return signedTransaction.toRawSolanaTransaction(blockHash.blockhash, blockHash.lastValidBlockHeight)
+    }
+
+    // One request: the source's owner names the token program, the recipient's ATA under it may be missing.
+    internal suspend fun splTransfer(fullTokenAccount: FullTokenAccount, recipient: String): SplTransfer {
+        val source = fullTokenAccount.tokenAccount.address
+        val mint = fullTokenAccount.mintAccount.address
+        val destinations = WellKnownPrograms.TOKEN_PROGRAMS.associateWith { associatedTokenAddress(recipient, mint, it) }
+        val addresses = listOf(source) + destinations.values
+        val owners = rpcAction.api.getAccountOwners(addresses).getOrThrow()
+        val programId = owners[source]?.takeIf(::isTokenAccount) ?: throw Exception("TokenAccount not found for $mint")
+        val destination = destinations.getValue(programId)
+
+        return SplTransfer(
+            programId = PublicKey(programId),
+            mint = PublicKey(mint),
+            decimals = fullTokenAccount.mintAccount.decimals,
+            source = PublicKey(source),
+            destination = PublicKey(destination),
+            destinationOwner = PublicKey(recipient),
+            createDestination = !isTokenAccount(owners[destination]),
+        )
     }
 
     private suspend fun fullTokenAccount(mintAddressString: String): FullTokenAccount =
